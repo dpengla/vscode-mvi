@@ -1,0 +1,88 @@
+{
+  "name": "mvijs-native",
+  "displayName": "MVI Native",
+  "description": "VS Code extension driving the native editor with mvi-style modal controls.",
+  "version": "0.0.1",
+  "publisher": "depeng",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "keywords": [
+    "vim",
+    "modal",
+    "editor",
+    "mvi",
+    "neovim"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "activationEvents": [
+    "onCommand:mvijs.openEditor",
+    "onCommand:mvijs.disableNativeEditor"
+  ],
+  "main": "./extension.js",
+  "scripts": {
+    "check": "node --check extension.js"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "mvijs.openEditor",
+        "title": "MVI: Enable Native Editor Mode"
+      },
+      {
+        "command": "mvijs.disableNativeEditor",
+        "title": "MVI: Disable Native Editor Mode"
+      },
+      {
+        "command": "mvijs.escape",
+        "title": "MVI: Escape"
+      },
+      {
+        "command": "mvijs.backspace",
+        "title": "MVI: Backspace"
+      },
+      {
+        "command": "mvijs.visualBlock",
+        "title": "MVI: Visual Block"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "mvijs.escape",
+        "key": "escape",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.escape",
+        "key": "ctrl+[",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.backspace",
+        "key": "backspace",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.visualBlock",
+        "key": "ctrl+v",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.visualBlock",
+        "key": "ctrl+q",
+        "when": "editorTextFocus && mvijs.enabled"
+      }
+    ]
+  }
+}
