@@ -53,6 +53,10 @@
         "title": "MVI: Backspace"
       },
       {
+        "command": "mvijs.enter",
+        "title": "MVI: Enter"
+      },
+      {
         "command": "mvijs.visualBlock",
         "title": "MVI: Visual Block"
       }
@@ -74,9 +78,19 @@
         "when": "editorTextFocus && mvijs.enabled"
       },
       {
+        "command": "mvijs.enter",
+        "key": "enter",
+        "when": "editorTextFocus && mvijs.enabled && mvijs.exMode"
+      },
+      {
         "command": "mvijs.visualBlock",
         "key": "ctrl+v",
         "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.visualBlock",
+        "key": "cmd+v",
+        "when": "isMac && editorTextFocus && mvijs.enabled"
       },
       {
         "command": "mvijs.visualBlock",

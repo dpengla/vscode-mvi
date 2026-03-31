@@ -38,6 +38,7 @@ vsce package
 - `MVI: Disable Native Editor Mode`
 - `Esc` / `Ctrl+[`
 - `Ctrl+V` / `Ctrl+Q` for visual block
+- On macOS, `Cmd+V` also enters visual block while MVI mode is active
 
 ## Notes
 

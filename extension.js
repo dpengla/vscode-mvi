@@ -3,6 +3,7 @@ const { spawn } = require("child_process");
 
 const MODE_CONTEXT_KEY = "mvijs.mode";
 const ENABLED_CONTEXT_KEY = "mvijs.enabled";
+const EX_CONTEXT_KEY = "mvijs.exMode";
 
 class NativeMviController {
   constructor(context) {
@@ -22,7 +23,10 @@ class NativeMviController {
     this.isPlayingMacro = false;
     this.pendingCount = "";
     this.pendingPrefixCount = 1;
-    this.savedCursorStyles = new WeakMap();
+    this.savedCursorOptions = new WeakMap();
+    this.visualBlockActive = null;
+    this.visualBlockColumn = null;
+    this.exCommandLine = null;
     this.spellEnabled = false;
     this.spellProgram = "/opt/homebrew/bin/aspell";
     this.spellRefreshTimer = null;
@@ -30,9 +34,11 @@ class NativeMviController {
     this.registers = new Map([["\"", { text: "", linewise: false }]]);
     this.selectedRegister = "\"";
     this.pendingRegister = false;
-    this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -900);
     this.statusBar.name = "MVI Mode";
     this.statusBar.command = "mvijs.disableNativeEditor";
+    this.exStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -1001);
+    this.exStatusBar.name = "MVI Ex Command";
     this.normalCursorDecoration = vscode.window.createTextEditorDecorationType({
       backgroundColor: new vscode.ThemeColor("editorCursor.foreground"),
       color: new vscode.ThemeColor("editor.background")
@@ -59,6 +65,20 @@ class NativeMviController {
         borderRadius: "2px"
       }
     });
+    this.visualBlockDecoration = vscode.window.createTextEditorDecorationType({
+      backgroundColor: new vscode.ThemeColor("editor.selectionBackground"),
+      borderWidth: "1px",
+      borderStyle: "solid",
+      borderColor: new vscode.ThemeColor("editor.selectionHighlightBorder")
+    });
+    this.visualBlockEmptyDecoration = vscode.window.createTextEditorDecorationType({
+      before: {
+        contentText: "\u00a0",
+        backgroundColor: new vscode.ThemeColor("editor.selectionBackground"),
+        width: "1ch",
+        borderRadius: "2px"
+      }
+    });
     this.cursorLineDecoration = vscode.window.createTextEditorDecorationType({
       isWholeLine: true,
       backgroundColor: new vscode.ThemeColor("editor.lineHighlightBackground")
@@ -78,8 +98,10 @@ class NativeMviController {
     this.pendingOperator = null;
     this.clearPendingCounts();
     await this.setContext(ENABLED_CONTEXT_KEY, true);
+    await this.setContext(EX_CONTEXT_KEY, false);
     await this.setMode("normal");
     this.statusBar.show();
+    this.exStatusBar.show();
     this.refresh();
   }
 
@@ -87,12 +109,15 @@ class NativeMviController {
     this.enabled = false;
     this.pendingOperator = null;
     this.visualAnchor = null;
+    this.exCommandLine = null;
     this.clearPendingCounts();
     await this.setContext(ENABLED_CONTEXT_KEY, false);
+    await this.setContext(EX_CONTEXT_KEY, false);
     await this.setMode("normal");
     this.clearDecorations();
     this.clearSpellDecorations();
     this.statusBar.hide();
+    this.exStatusBar.hide();
   }
 
   async setMode(mode) {
@@ -107,12 +132,25 @@ class NativeMviController {
     if (!String(mode).startsWith("visual")) {
       this.visualAnchor = null;
     }
+    if (mode !== "visual-block") {
+      this.visualBlockActive = null;
+      this.visualBlockColumn = null;
+    }
     if (mode !== "normal") {
       this.clearPendingCounts();
     }
     await this.setContext(MODE_CONTEXT_KEY, mode);
-    this.statusBar.text = `MVI ${mode.toUpperCase()}${this.spellEnabled ? " SPELL" : ""}`;
+    this.updateStatusBar();
     this.refresh();
+  }
+
+  updateStatusBar() {
+    if (this.exCommandLine) {
+      this.exStatusBar.text = `:${this.exCommandLine.value}`;
+      return;
+    }
+    this.exStatusBar.text = " ";
+    this.statusBar.text = `MVI ${this.mode.toUpperCase()}${this.spellEnabled ? " SPELL" : ""}`;
   }
 
   isActiveEditor(editor) {
@@ -133,6 +171,8 @@ class NativeMviController {
       editor.setDecorations(this.normalEmptyCursorDecoration, []);
       editor.setDecorations(this.visualLineDecoration, []);
       editor.setDecorations(this.visualLineEmptyDecoration, []);
+      editor.setDecorations(this.visualBlockDecoration, []);
+      editor.setDecorations(this.visualBlockEmptyDecoration, []);
       editor.setDecorations(this.cursorLineDecoration, []);
     }
   }
@@ -147,32 +187,37 @@ class NativeMviController {
     if (!editor) {
       return;
     }
-    if (!this.savedCursorStyles.has(editor)) {
-      this.savedCursorStyles.set(editor, editor.options.cursorStyle);
+    if (!this.savedCursorOptions.has(editor)) {
+      this.savedCursorOptions.set(editor, {
+        cursorStyle: editor.options.cursorStyle,
+        cursorBlinking: editor.options.cursorBlinking
+      });
     }
-    if (editor.options.cursorStyle !== style) {
+    if (editor.options.cursorStyle !== style || editor.options.cursorBlinking !== "solid") {
       editor.options = {
         ...editor.options,
-        cursorStyle: style
+        cursorStyle: style,
+        cursorBlinking: "solid"
       };
     }
   }
 
   restoreCursorStyle(editor) {
-    if (!editor || !this.savedCursorStyles.has(editor)) {
+    if (!editor || !this.savedCursorOptions.has(editor)) {
       return;
     }
-    const saved = this.savedCursorStyles.get(editor);
-    if (editor.options.cursorStyle !== saved) {
+    const saved = this.savedCursorOptions.get(editor);
+    if (editor.options.cursorStyle !== saved.cursorStyle || editor.options.cursorBlinking !== saved.cursorBlinking) {
       editor.options = {
         ...editor.options,
-        cursorStyle: saved
+        cursorStyle: saved.cursorStyle,
+        cursorBlinking: saved.cursorBlinking
       };
     }
   }
 
   desiredCursorStyle() {
-    if (this.mode === "normal" || this.mode === "visual-line") {
+    if (this.mode === "normal" || this.mode === "visual-line" || this.mode === "visual-block") {
       return vscode.TextEditorCursorStyle.Block;
     }
     if (String(this.mode).startsWith("visual")) {
@@ -207,6 +252,10 @@ class NativeMviController {
       }
       editor.setDecorations(this.visualLineDecoration, ranges);
       editor.setDecorations(this.visualLineEmptyDecoration, emptyRanges);
+    } else if (this.mode === "visual-block") {
+      const { ranges, emptyRanges } = this.visualBlockDecorationRanges(editor);
+      editor.setDecorations(this.visualBlockDecoration, ranges);
+      editor.setDecorations(this.visualBlockEmptyDecoration, emptyRanges);
     } else {
       editor.setDecorations(this.cursorLineDecoration, [new vscode.Range(active.line, 0, active.line, 0)]);
     }
@@ -287,6 +336,10 @@ class NativeMviController {
       if (!this.visualAnchor) {
         this.visualAnchor = selection.anchor;
       }
+      if (this.mode === "visual-block" && !this.visualBlockActive) {
+        this.visualBlockActive = this.clampPosition(document, selection.active);
+        this.visualBlockColumn = selection.active.character;
+      }
       if (this.mode === "visual-line") {
         const active = this.normalizeNormalPosition(document, this.clampNavigablePosition(document, selection.active));
         if (!selection.anchor.isEqual(active) || !selection.active.isEqual(active)) {
@@ -312,6 +365,12 @@ class NativeMviController {
     const line = Math.max(0, Math.min(position.line, document.lineCount - 1));
     const lineLength = document.lineAt(line).text.length;
     const character = Math.max(0, Math.min(position.character, lineLength));
+    return new vscode.Position(line, character);
+  }
+
+  clampVisualBlockPosition(document, position) {
+    const line = Math.max(0, Math.min(position.line, document.lineCount - 1));
+    const character = Math.max(0, position.character);
     return new vscode.Position(line, character);
   }
 
@@ -366,6 +425,11 @@ class NativeMviController {
     if (!editor) {
       return vscode.commands.executeCommand("default:type", { text });
     }
+    if (this.exCommandLine) {
+      this.exCommandLine.value += String(text || "");
+      this.updateStatusBar();
+      return;
+    }
     if (this.mode === "insert") {
       this.recordMacroEvent({ type: "type", text });
       return vscode.commands.executeCommand("default:type", { text });
@@ -379,6 +443,11 @@ class NativeMviController {
     const editor = this.getEditor();
     if (!editor) {
       return vscode.commands.executeCommand("deleteLeft");
+    }
+    if (this.exCommandLine) {
+      this.exCommandLine.value = this.exCommandLine.value.slice(0, -1);
+      this.updateStatusBar();
+      return;
     }
     if (this.mode === "insert") {
       this.recordMacroEvent({ type: "backspace" });
@@ -394,6 +463,11 @@ class NativeMviController {
     if (!editor) {
       return;
     }
+    if (this.exCommandLine) {
+      await this.closeExCommandLine();
+      this.refresh(editor);
+      return;
+    }
     this.pendingOperator = null;
     this.pendingRegister = false;
     this.clearPendingCounts();
@@ -403,6 +477,26 @@ class NativeMviController {
       editor.selection = new vscode.Selection(active, active);
     }
     await this.setMode("normal");
+  }
+
+  async handleEnter() {
+    if (!this.exCommandLine) {
+      return vscode.commands.executeCommand("default:type", { text: "\n" });
+    }
+    const editor = this.getEditor();
+    const command = this.exCommandLine.value.trim();
+    await this.closeExCommandLine();
+    if (!editor) {
+      return;
+    }
+    await this.executeExCommand(editor, command);
+    this.refresh(editor);
+  }
+
+  async closeExCommandLine() {
+    this.exCommandLine = null;
+    await this.setContext(EX_CONTEXT_KEY, false);
+    this.updateStatusBar();
   }
 
   async handleVisualBlockCommand() {
@@ -428,7 +522,7 @@ class NativeMviController {
     if (!this.spellEnabled) {
       this.clearSpellDecorations();
     }
-    this.statusBar.text = `MVI ${this.mode.toUpperCase()}${this.spellEnabled ? " SPELL" : ""}`;
+    this.updateStatusBar();
     this.refresh(editor);
   }
 
@@ -1161,6 +1255,9 @@ class NativeMviController {
   }
 
   currentPosition(editor) {
+    if (this.mode === "visual-block" && this.visualBlockActive) {
+      return new vscode.Position(this.visualBlockActive.line, Math.max(0, this.visualBlockColumn ?? this.visualBlockActive.character));
+    }
     return this.mode === "normal"
       ? this.normalizeNormalPosition(editor.document, editor.selection.active)
       : this.clampPosition(editor.document, editor.selection.active);
@@ -1246,10 +1343,13 @@ class NativeMviController {
     }
     next = (this.mode === "normal" || this.mode === "visual-line")
       ? this.normalizeNormalPosition(document, this.clampNavigablePosition(document, next))
-      : this.clampPosition(document, next);
+      : (this.mode === "visual-block" ? this.clampVisualBlockPosition(document, next) : this.clampPosition(document, next));
     if (selecting && this.visualAnchor) {
       if (this.mode === "visual-block") {
-        editor.selection = new vscode.Selection(this.visualAnchor, next);
+        this.visualBlockActive = next;
+        this.visualBlockColumn = next.character;
+        const visible = this.clampPosition(document, next);
+        editor.selection = new vscode.Selection(visible, visible);
         this.expandVisualBlockSelections(editor);
         return;
       }
@@ -1283,32 +1383,31 @@ class NativeMviController {
     if (!this.visualAnchor) {
       return;
     }
-    const anchor = this.visualAnchor;
-    const active = editor.selection.active;
-    const startLine = Math.min(anchor.line, active.line);
-    const endLine = Math.max(anchor.line, active.line);
-    const startCol = Math.min(anchor.character, active.character);
-    const endCol = Math.max(anchor.character, active.character);
-    const selections = [];
-    for (let line = startLine; line <= endLine; line += 1) {
-      const text = editor.document.lineAt(line).text;
-      const lineStart = Math.min(startCol, text.length);
-      const lineEnd = Math.min(endCol + 1, text.length);
-      selections.push(new vscode.Selection(new vscode.Position(line, lineStart), new vscode.Position(line, lineEnd)));
-    }
-    editor.selections = selections.length ? selections : [new vscode.Selection(anchor, active)];
+    const active = this.visualBlockActive || editor.selection.active;
+    const visible = this.clampPosition(editor.document, active);
+    editor.selection = new vscode.Selection(visible, visible);
   }
 
   async enterVisualBlock(editor) {
     this.visualAnchor = editor.selection.active;
+    this.visualBlockActive = editor.selection.active;
+    this.visualBlockColumn = editor.selection.active.character;
     await this.setMode("visual-block");
     this.expandVisualBlockSelections(editor);
   }
 
   prepareVisualBlockInsert(editor, append) {
-    const selections = editor.selections && editor.selections.length ? editor.selections : [editor.selection];
-    editor.selections = selections.map((selection) => {
-      const position = append ? selection.end : selection.start;
+    const bounds = this.visualBlockBounds(editor);
+    if (!bounds) {
+      return;
+    }
+    editor.selections = Array.from({ length: bounds.endLine - bounds.startLine + 1 }, (_, offset) => {
+      const line = bounds.startLine + offset;
+      const lineLength = editor.document.lineAt(line).text.length;
+      const baseCharacter = Math.min(bounds.startCol, lineLength);
+      const position = append
+        ? new vscode.Position(line, Math.min(baseCharacter + 1, lineLength))
+        : new vscode.Position(line, baseCharacter);
       return new vscode.Selection(position, position);
     });
   }
@@ -1434,15 +1533,9 @@ class NativeMviController {
   }
 
   async openExCommand(editor) {
-    const value = await vscode.window.showInputBox({
-      prompt: ": Command",
-      value: ""
-    });
-    if (typeof value !== "string") {
-      this.refresh(editor);
-      return;
-    }
-    await this.executeExCommand(editor, value.trim());
+    this.exCommandLine = { value: this.exVisualRangePrefix(editor) };
+    await this.setContext(EX_CONTEXT_KEY, true);
+    this.updateStatusBar();
     this.refresh(editor);
   }
 
@@ -1487,6 +1580,10 @@ class NativeMviController {
     }
     if (exCommand === "w") {
       await editor.document.save();
+      return;
+    }
+    if (/^!/.test(exCommand)) {
+      await this.executeFilterShellCommand(editor, range || this.currentLineRange(editor), exCommand.slice(1).trim());
       return;
     }
     if (/^r\s*!/.test(exCommand)) {
@@ -1538,15 +1635,39 @@ class NativeMviController {
     editor.selection = new vscode.Selection(next, next);
   }
 
-  async runShellCommand(shellCommand) {
+  async executeFilterShellCommand(editor, range, shellCommand) {
+    if (!shellCommand) {
+      return;
+    }
+    const target = this.lineRange(editor, range.start, range.end);
+    const input = editor.document.getText(target);
+    const output = await this.runShellCommand(shellCommand, input);
+    if (output == null) {
+      vscode.window.setStatusBarMessage(`mvi :! failed: ${shellCommand}`, 2000);
+      return;
+    }
+    await editor.edit((editBuilder) => {
+      editBuilder.replace(target, output);
+    });
+    this.jumpToLine(editor, Math.min(range.start, Math.max(0, editor.document.lineCount - 1)));
+    if (String(this.mode).startsWith("visual")) {
+      await this.setMode("normal");
+    }
+  }
+
+  async runShellCommand(shellCommand, input = null) {
     return new Promise((resolve) => {
       const child = spawn("/bin/bash", ["-lc", shellCommand], {
-        stdio: ["ignore", "pipe", "pipe"]
+        stdio: ["pipe", "pipe", "pipe"]
       });
       let stdout = "";
       child.stdout.on("data", (chunk) => {
         stdout += chunk.toString();
       });
+      if (input != null) {
+        child.stdin.write(input);
+      }
+      child.stdin.end();
       child.on("error", () => {
         resolve(null);
       });
@@ -1567,24 +1688,31 @@ class NativeMviController {
         command: trimmed.slice(1).trim()
       };
     }
-    const match = trimmed.match(/^([.$]|\d+)(?:,([.$]|\d+))?(?:\s*(.*))?$/);
+    const match = trimmed.match(/^(('<|'>|[.$]|\d+))(?:,(?<end>'<|'>|[.$]|\d+))?(?:\s*(?<command>.*))?$/);
     if (!match) {
       return { range: null, command: trimmed };
     }
     const start = this.parseExAddress(editor, match[1]);
-    const end = this.parseExAddress(editor, match[2] || match[1]);
+    const end = this.parseExAddress(editor, match.groups?.end || match[1]);
     if (start === null || end === null) {
       return { range: null, command: trimmed };
     }
     return {
       range: { start: Math.min(start, end), end: Math.max(start, end) },
-      command: (match[3] || "").trim()
+      command: (match.groups?.command || "").trim()
     };
   }
 
   parseExAddress(editor, token) {
     if (!token) {
       return null;
+    }
+    if (token === "'<" || token === "'>") {
+      const range = this.exSelectionLineRange(editor);
+      if (!range) {
+        return null;
+      }
+      return token === "'<" ? range.start : range.end;
     }
     if (token === ".") {
       return editor.selection.active.line;
@@ -1602,6 +1730,76 @@ class NativeMviController {
   currentLineRange(editor) {
     const line = editor.selection.active.line;
     return { start: line, end: line };
+  }
+
+  exVisualRangePrefix(editor) {
+    if (!String(this.mode).startsWith("visual")) {
+      return "";
+    }
+    return "'<,'>";
+  }
+
+  exSelectionLineRange(editor) {
+    if (this.mode === "visual-line" && this.visualAnchor) {
+      const { startLine, endLine } = this.visualLineBounds(editor);
+      return { start: startLine, end: endLine };
+    }
+    const selections = editor.selections && editor.selections.length ? editor.selections : [editor.selection];
+    const lines = selections
+      .filter((selection) => !selection.isEmpty)
+      .flatMap((selection) => [selection.start.line, selection.end.line]);
+    if (lines.length) {
+      return {
+        start: Math.min(...lines),
+        end: Math.max(...lines)
+      };
+    }
+    if (this.visualAnchor) {
+      return {
+        start: Math.min(this.visualAnchor.line, editor.selection.active.line),
+        end: Math.max(this.visualAnchor.line, editor.selection.active.line)
+      };
+    }
+    return null;
+  }
+
+  visualBlockBounds(editor) {
+    const anchor = this.visualAnchor;
+    const active = this.visualBlockActive || editor.selection.active;
+    if (!anchor || !active) {
+      return null;
+    }
+    return {
+      startLine: Math.min(anchor.line, active.line),
+      endLine: Math.max(anchor.line, active.line),
+      startCol: Math.min(anchor.character, this.visualBlockColumn ?? active.character),
+      endCol: Math.max(anchor.character, this.visualBlockColumn ?? active.character)
+    };
+  }
+
+  visualBlockRanges(editor) {
+    const bounds = this.visualBlockBounds(editor);
+    if (!bounds) {
+      return [];
+    }
+    const ranges = [];
+    for (let line = bounds.startLine; line <= bounds.endLine; line += 1) {
+      const lineLength = editor.document.lineAt(line).text.length;
+      const start = Math.min(bounds.startCol, lineLength);
+      const end = Math.min(bounds.endCol + 1, lineLength);
+      ranges.push(new vscode.Range(new vscode.Position(line, start), new vscode.Position(line, end)));
+    }
+    return ranges;
+  }
+
+  visualBlockDecorationRanges(editor) {
+    const ranges = [];
+    for (const range of this.visualBlockRanges(editor)) {
+      if (!range.isEmpty) {
+        ranges.push(range);
+      }
+    }
+    return { ranges, emptyRanges: [] };
   }
 
   jumpToLine(editor, line) {
@@ -2098,6 +2296,13 @@ class NativeMviController {
       this.registers.set("0", { text: text.endsWith("\n") ? text : `${text}\n`, linewise: true });
       return;
     }
+    if (this.mode === "visual-block") {
+      const ranges = this.visualBlockRanges(editor);
+      const text = ranges.map((range) => editor.document.getText(range)).join("\n");
+      this.writeRegister(text, false);
+      this.registers.set("0", { text, linewise: false });
+      return;
+    }
     const selections = editor.selections && editor.selections.length ? editor.selections : [editor.selection];
     const text = selections.map((selection) => editor.document.getText(new vscode.Range(selection.start, selection.end))).join("\n");
     this.writeRegister(text, false);
@@ -2116,6 +2321,21 @@ class NativeMviController {
       editor.selection = new vscode.Selection(next, next);
       return;
     }
+    if (this.mode === "visual-block") {
+      const ranges = this.visualBlockRanges(editor);
+      const text = ranges.map((range) => editor.document.getText(range)).join("\n");
+      this.captureDeletedText(text, false);
+      await editor.edit((editBuilder) => {
+        for (const range of ranges) {
+          if (!range.isEmpty) {
+            editBuilder.delete(range);
+          }
+        }
+      });
+      const next = this.normalizeNormalPosition(editor.document, new vscode.Position(ranges[0]?.start.line || 0, ranges[0]?.start.character || 0));
+      editor.selection = new vscode.Selection(next, next);
+      return;
+    }
     const selections = editor.selections && editor.selections.length ? editor.selections : [editor.selection];
     const text = selections.map((selection) => editor.document.getText(new vscode.Range(selection.start, selection.end))).join("\n");
     this.captureDeletedText(text, false);
@@ -2129,6 +2349,29 @@ class NativeMviController {
   }
 
   async toggleCaseInSelections(editor) {
+    if (this.mode === "visual-block") {
+      const replacements = [];
+      const ranges = this.visualBlockRanges(editor);
+      for (const range of ranges) {
+        const text = editor.document.getText(range);
+        if (!text) {
+          continue;
+        }
+        const toggled = Array.from(text, (char) => (char === char.toUpperCase() ? char.toLowerCase() : char.toUpperCase())).join("");
+        replacements.push({ range, text: toggled });
+      }
+      if (!replacements.length) {
+        return;
+      }
+      await editor.edit((editBuilder) => {
+        for (const replacement of replacements) {
+          editBuilder.replace(replacement.range, replacement.text);
+        }
+      });
+      const next = this.normalizeNormalPosition(editor.document, replacements[0].range.start);
+      editor.selection = new vscode.Selection(next, next);
+      return;
+    }
     const selections = editor.selections && editor.selections.length ? editor.selections : [editor.selection];
     const replacements = [];
     for (const selection of selections) {
@@ -2770,6 +3013,7 @@ class NativeMviController {
       this.restoreCursorStyle(editor);
     }
     this.statusBar.dispose();
+    this.exStatusBar.dispose();
     this.normalCursorDecoration.dispose();
     this.normalEmptyCursorDecoration.dispose();
     this.visualLineDecoration.dispose();
@@ -2797,6 +3041,10 @@ async function activate(context) {
 
   context.subscriptions.push(vscode.commands.registerCommand("mvijs.backspace", async () => {
     await controller.handleBackspace();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.enter", async () => {
+    await controller.handleEnter();
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("mvijs.visualBlock", async () => {
