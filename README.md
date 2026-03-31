@@ -1,12 +1,12 @@
-# MVI Native
+# MVI
 
-`MVI Native` is a local VS Code extension that drives the real editor with mvi-style modal controls.
+`MVI` is a local VS Code extension with mvi-style modal controls.
 
 ## What It Does
 
-- Keeps editing inside the native VS Code text editor
+- Keeps editing inside the VS Code text editor
 - Provides normal, insert, visual, visual-line, and visual-block modes
-- Uses native decorations for cursor-line, block cursor, visual-line, and spell rendering
+- Uses VS Code decorations for cursor-line, block cursor, visual-line, and spell rendering
 - Supports motions, operators, search, marks, registers, macros, ex commands, and external `aspell` suggestions via `z=`
 
 ## Running Locally
@@ -14,7 +14,8 @@
 1. Open this folder in VS Code.
 2. Press `F5`.
 3. In the Extension Development Host window, open a file.
-4. Run `MVI: Enable Native Editor Mode`.
+4. MVI will enable automatically on startup by default.
+5. To opt out, set `mvijs.autoEnable` to `false`.
 
 ## Packaging A VSIX
 
@@ -34,8 +35,9 @@ vsce package
 
 ## Key Commands
 
-- `MVI: Enable Native Editor Mode`
-- `MVI: Disable Native Editor Mode`
+- `MVI: Enable`
+- `MVI: Disable`
+- `mvijs.autoEnable` toggles automatic startup enablement
 - `Esc` / `Ctrl+[`
 - `Ctrl+V` / `Ctrl+Q` for visual block
 - On macOS, `Cmd+V` also enters visual block while MVI mode is active

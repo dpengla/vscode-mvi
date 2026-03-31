@@ -5,7 +5,7 @@ const MODE_CONTEXT_KEY = "mvijs.mode";
 const ENABLED_CONTEXT_KEY = "mvijs.enabled";
 const EX_CONTEXT_KEY = "mvijs.exMode";
 
-class NativeMviController {
+class MviController {
   constructor(context) {
     this.context = context;
     this.enabled = false;
@@ -36,7 +36,7 @@ class NativeMviController {
     this.pendingRegister = false;
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -900);
     this.statusBar.name = "MVI Mode";
-    this.statusBar.command = "mvijs.disableNativeEditor";
+    this.statusBar.command = "mvijs.disable";
     this.exStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -1001);
     this.exStatusBar.name = "MVI Ex Command";
     this.normalCursorDecoration = vscode.window.createTextEditorDecorationType({
@@ -3025,13 +3025,15 @@ class NativeMviController {
 let controller = null;
 
 async function activate(context) {
-  controller = new NativeMviController(context);
+  controller = new MviController(context);
+  const config = vscode.workspace.getConfiguration();
+  const autoEnable = config.get("mvijs.autoEnable", true);
 
-  context.subscriptions.push(vscode.commands.registerCommand("mvijs.openEditor", async () => {
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.enable", async () => {
     await controller.enable();
   }));
 
-  context.subscriptions.push(vscode.commands.registerCommand("mvijs.disableNativeEditor", async () => {
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.disable", async () => {
     await controller.disable();
   }));
 
@@ -3082,6 +3084,9 @@ async function activate(context) {
   context.subscriptions.push(controller);
   await vscode.commands.executeCommand("setContext", ENABLED_CONTEXT_KEY, false);
   await vscode.commands.executeCommand("setContext", MODE_CONTEXT_KEY, "normal");
+  if (autoEnable) {
+    await controller.enable();
+  }
 }
 
 function deactivate() {

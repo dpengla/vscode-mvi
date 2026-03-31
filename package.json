@@ -1,7 +1,8 @@
 {
-  "name": "mvijs-native",
-  "displayName": "MVI Native",
-  "description": "VS Code extension driving the native editor with mvi-style modal controls.",
+  "name": "mvijs",
+  "displayName": "MVI",
+  "description": "VS Code extension with mvi-style modal controls.",
+  "repository": "https://github.com/dpengla/vscode-mvi",
   "version": "0.0.1",
   "publisher": "depeng",
   "license": "MIT",
@@ -27,8 +28,9 @@
     }
   },
   "activationEvents": [
-    "onCommand:mvijs.openEditor",
-    "onCommand:mvijs.disableNativeEditor"
+    "onStartupFinished",
+    "onCommand:mvijs.enable",
+    "onCommand:mvijs.disable"
   ],
   "main": "./extension.js",
   "scripts": {
@@ -37,12 +39,12 @@
   "contributes": {
     "commands": [
       {
-        "command": "mvijs.openEditor",
-        "title": "MVI: Enable Native Editor Mode"
+        "command": "mvijs.enable",
+        "title": "MVI: Enable"
       },
       {
-        "command": "mvijs.disableNativeEditor",
-        "title": "MVI: Disable Native Editor Mode"
+        "command": "mvijs.disable",
+        "title": "MVI: Disable"
       },
       {
         "command": "mvijs.escape",
@@ -61,6 +63,16 @@
         "title": "MVI: Visual Block"
       }
     ],
+    "configuration": {
+      "title": "MVI",
+      "properties": {
+        "mvijs.autoEnable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable MVI automatically when VS Code starts."
+        }
+      }
+    },
     "keybindings": [
       {
         "command": "mvijs.escape",
