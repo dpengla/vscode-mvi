@@ -31,6 +31,25 @@ class MviController {
     this.spellProgram = "/opt/homebrew/bin/aspell";
     this.spellRefreshTimer = null;
     this.spellRequestId = 0;
+    this.scrollLineCount = null;
+    this.lastSubstitute = null;
+    this.trackedLineState = null;
+    this.alternateDocumentUri = null;
+    this.currentDocumentUri = null;
+    this.tagStack = [];
+    this.options = {
+      number: false,
+      ignorecase: false,
+      wrapscan: true,
+      showmode: true,
+      shiftwidth: 2,
+      tabstop: 2,
+      expandtab: true,
+      autoindent: true,
+      readonly: false,
+      ruler: false,
+      list: false
+    };
     this.registers = new Map([["\"", { text: "", linewise: false }]]);
     this.selectedRegister = "\"";
     this.pendingRegister = false;
@@ -39,6 +58,7 @@ class MviController {
     this.statusBar.command = "mvijs.disable";
     this.exStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -1001);
     this.exStatusBar.name = "MVI Ex Command";
+    this.outputChannel = vscode.window.createOutputChannel("MVI");
     this.normalCursorDecoration = vscode.window.createTextEditorDecorationType({
       backgroundColor: new vscode.ThemeColor("editorCursor.foreground"),
       color: new vscode.ThemeColor("editor.background")
@@ -87,6 +107,12 @@ class MviController {
       textDecoration: "underline wavy var(--vscode-editorError-foreground)",
       overviewRulerColor: new vscode.ThemeColor("editorError.foreground")
     });
+    this.searchPreviewDecoration = vscode.window.createTextEditorDecorationType({
+      backgroundColor: new vscode.ThemeColor("editor.findMatchHighlightBackground"),
+      borderColor: new vscode.ThemeColor("editor.findMatchHighlightBorder"),
+      borderWidth: "1px",
+      borderStyle: "solid"
+    });
   }
 
   async setContext(key, value) {
@@ -102,20 +128,30 @@ class MviController {
     await this.setMode("normal");
     this.statusBar.show();
     this.exStatusBar.show();
+    this.captureCurrentLineState(vscode.window.activeTextEditor);
     this.refresh();
   }
 
   async disable() {
     this.enabled = false;
     this.pendingOperator = null;
+    this.pendingRegister = false;
     this.visualAnchor = null;
+    this.visualBlockActive = null;
+    this.visualBlockColumn = null;
     this.exCommandLine = null;
+    this.lastFind = null;
     this.clearPendingCounts();
+    this.clearSelectedRegister();
     await this.setContext(ENABLED_CONTEXT_KEY, false);
     await this.setContext(EX_CONTEXT_KEY, false);
-    await this.setMode("normal");
+    this.mode = "normal";
+    await this.setContext(MODE_CONTEXT_KEY, "normal");
     this.clearDecorations();
     this.clearSpellDecorations();
+    for (const editor of vscode.window.visibleTextEditors) {
+      this.restoreCursorStyle(editor);
+    }
     this.statusBar.hide();
     this.exStatusBar.hide();
   }
@@ -146,11 +182,28 @@ class MviController {
 
   updateStatusBar() {
     if (this.exCommandLine) {
-      this.exStatusBar.text = `:${this.exCommandLine.value}`;
+      this.exStatusBar.text = `${this.exCommandLine.prefix || ":"}${this.exCommandLine.value}`;
       return;
     }
     this.exStatusBar.text = " ";
-    this.statusBar.text = `MVI ${this.mode.toUpperCase()}${this.spellEnabled ? " SPELL" : ""}`;
+    this.statusBar.text = this.formatStatusBarText();
+  }
+
+  formatStatusBarText(extra = "", label = this.mode) {
+    const base = `-- ${String(label).toUpperCase()} --`;
+    const suffix = extra ? ` ${extra}` : "";
+    const spellSuffix = this.spellEnabled ? " SPELL" : "";
+    const rulerSuffix = this.options.ruler ? ` ${this.rulerText()}` : "";
+    return `${base}${suffix}${spellSuffix}${rulerSuffix}`;
+  }
+
+  rulerText(editor = this.getEditor()) {
+    if (!editor) {
+      return "";
+    }
+    const document = editor.document;
+    const active = editor.selection.active;
+    return `${active.line + 1},${active.character + 1}`;
   }
 
   isActiveEditor(editor) {
@@ -173,6 +226,7 @@ class MviController {
       editor.setDecorations(this.visualLineEmptyDecoration, []);
       editor.setDecorations(this.visualBlockDecoration, []);
       editor.setDecorations(this.visualBlockEmptyDecoration, []);
+      editor.setDecorations(this.searchPreviewDecoration, []);
       editor.setDecorations(this.cursorLineDecoration, []);
     }
   }
@@ -217,7 +271,7 @@ class MviController {
   }
 
   desiredCursorStyle() {
-    if (this.mode === "normal" || this.mode === "visual-line" || this.mode === "visual-block") {
+    if (this.mode === "normal" || this.mode === "visual-line" || this.mode === "visual-block" || this.mode === "replace") {
       return vscode.TextEditorCursorStyle.Block;
     }
     if (String(this.mode).startsWith("visual")) {
@@ -237,6 +291,7 @@ class MviController {
       }
     }
     this.normalizeSelection(editor);
+    this.updateStatusBar();
     const active = editor.selection.active;
     if (this.mode === "visual-line" && this.visualAnchor) {
       const { startLine, endLine } = this.visualLineBounds(editor);
@@ -256,8 +311,6 @@ class MviController {
       const { ranges, emptyRanges } = this.visualBlockDecorationRanges(editor);
       editor.setDecorations(this.visualBlockDecoration, ranges);
       editor.setDecorations(this.visualBlockEmptyDecoration, emptyRanges);
-    } else {
-      editor.setDecorations(this.cursorLineDecoration, [new vscode.Range(active.line, 0, active.line, 0)]);
     }
     const cursorStyle = this.desiredCursorStyle();
     if (cursorStyle) {
@@ -273,6 +326,7 @@ class MviController {
         editor.setDecorations(this.normalEmptyCursorDecoration, [new vscode.Range(active.line, 0, active.line, 0)]);
       }
     }
+    this.updateSearchPreview(editor);
     if (this.spellEnabled) {
       this.scheduleSpellRefresh(editor);
     } else {
@@ -428,10 +482,26 @@ class MviController {
     if (this.exCommandLine) {
       this.exCommandLine.value += String(text || "");
       this.updateStatusBar();
+      if (this.exCommandLine.prefix === "/" || this.exCommandLine.prefix === "?") {
+        this.refresh(editor);
+      }
       return;
     }
-    if (this.mode === "insert") {
+    if (this.mode === "insert" || this.mode === "replace") {
       this.recordMacroEvent({ type: "type", text });
+      if (this.mode === "replace") {
+        for (const char of String(text || "")) {
+          const active = editor.selection.active;
+          const lineText = editor.document.lineAt(active.line).text;
+          if (active.character < lineText.length) {
+            await editor.edit((editBuilder) => {
+              editBuilder.delete(new vscode.Range(active, active.translate(0, 1)));
+            });
+          }
+          await vscode.commands.executeCommand("default:type", { text: char });
+        }
+        return;
+      }
       return vscode.commands.executeCommand("default:type", { text });
     }
     for (const char of String(text || "")) {
@@ -447,9 +517,12 @@ class MviController {
     if (this.exCommandLine) {
       this.exCommandLine.value = this.exCommandLine.value.slice(0, -1);
       this.updateStatusBar();
+      if (this.exCommandLine.prefix === "/" || this.exCommandLine.prefix === "?") {
+        this.refresh(editor);
+      }
       return;
     }
-    if (this.mode === "insert") {
+    if (this.mode === "insert" || this.mode === "replace") {
       this.recordMacroEvent({ type: "backspace" });
       return vscode.commands.executeCommand("deleteLeft");
     }
@@ -471,7 +544,7 @@ class MviController {
     this.pendingOperator = null;
     this.pendingRegister = false;
     this.clearPendingCounts();
-    if (this.mode === "insert") {
+    if (this.mode === "insert" || this.mode === "replace") {
       this.recordMacroEvent({ type: "escape" });
       const active = this.normalPositionFromInsert(editor.document, editor.selection.active);
       editor.selection = new vscode.Selection(active, active);
@@ -484,9 +557,21 @@ class MviController {
       return vscode.commands.executeCommand("default:type", { text: "\n" });
     }
     const editor = this.getEditor();
-    const command = this.exCommandLine.value.trim();
+    const { prefix = ":", value = "" } = this.exCommandLine;
+    const command = value.trim();
     await this.closeExCommandLine();
     if (!editor) {
+      return;
+    }
+    if (prefix === "/" || prefix === "?") {
+      const spec = this.parseSearchSpec(command, prefix === "/" ? 1 : -1);
+      if (!spec) {
+        this.refresh(editor);
+        return;
+      }
+      this.lastSearch = spec;
+      await this.runSearch(editor, spec.pattern, spec.direction, { regex: true, offset: spec.offset || 0 });
+      this.refresh(editor);
       return;
     }
     await this.executeExCommand(editor, command);
@@ -497,6 +582,34 @@ class MviController {
     this.exCommandLine = null;
     await this.setContext(EX_CONTEXT_KEY, false);
     this.updateStatusBar();
+  }
+
+  updateSearchPreview(editor) {
+    if (!editor || !this.exCommandLine || !["/", "?"].includes(this.exCommandLine.prefix)) {
+      return;
+    }
+    const spec = this.parseSearchSpec(this.exCommandLine.value, this.exCommandLine.prefix === "/" ? 1 : -1);
+    if (!spec || !spec.pattern) {
+      return;
+    }
+    const text = editor.document.getText();
+    let regex;
+    try {
+      regex = new RegExp(spec.pattern, this.searchFlags());
+    } catch (_error) {
+      return;
+    }
+    const ranges = [];
+    let match;
+    while ((match = regex.exec(text))) {
+      const start = editor.document.positionAt(match.index);
+      const end = editor.document.positionAt(match.index + match[0].length);
+      ranges.push(new vscode.Range(start, end));
+      if (match[0].length === 0) {
+        regex.lastIndex += 1;
+      }
+    }
+    editor.setDecorations(this.searchPreviewDecoration, ranges);
   }
 
   async handleVisualBlockCommand() {
@@ -511,6 +624,203 @@ class MviController {
     }
     await this.enterVisualBlock(editor);
     this.refresh(editor);
+  }
+
+  async handlePageMove(forward) {
+    const editor = this.getEditor();
+    if (!editor) {
+      return;
+    }
+    const isVisual = String(this.mode).startsWith("visual");
+    const command = forward
+      ? (isVisual ? "cursorPageDownSelect" : "cursorPageDown")
+      : (isVisual ? "cursorPageUpSelect" : "cursorPageUp");
+    await vscode.commands.executeCommand(command);
+    this.refresh(editor);
+  }
+
+  visibleLineSpan(editor) {
+    const range = editor.visibleRanges && editor.visibleRanges[0];
+    if (!range) {
+      return Math.max(1, Math.min(20, editor.document.lineCount));
+    }
+    return Math.max(1, range.end.line - range.start.line + 1);
+  }
+
+  resolveScrollLineCount(editor, explicitCount) {
+    if (explicitCount != null) {
+      this.scrollLineCount = Math.max(1, explicitCount);
+      return this.scrollLineCount;
+    }
+    if (this.scrollLineCount != null) {
+      return this.scrollLineCount;
+    }
+    this.scrollLineCount = Math.max(1, Math.floor(this.visibleLineSpan(editor) / 2));
+    return this.scrollLineCount;
+  }
+
+  async handleHalfPageScroll(forward) {
+    const editor = this.getEditor();
+    if (!editor) {
+      return;
+    }
+    const count = this.resolveScrollLineCount(editor, this.consumeOptionalCount());
+    this.move(editor, forward ? "j" : "k", String(this.mode).startsWith("visual"), count);
+    if (this.mode === "visual-line") {
+      this.expandVisualLineSelection(editor);
+    } else if (this.mode === "visual-block") {
+      this.expandVisualBlockSelections(editor);
+    }
+    this.refresh(editor);
+  }
+
+  async handleLineScroll(forward) {
+    const editor = this.getEditor();
+    if (!editor) {
+      return;
+    }
+    const count = Math.max(1, this.consumeOptionalCount() || 1);
+    await vscode.commands.executeCommand("editorScroll", {
+      to: forward ? "down" : "up",
+      by: "line",
+      value: count,
+      revealCursor: false
+    });
+    this.refresh(editor);
+  }
+
+  async handleScreenRefresh() {
+    const editor = this.getEditor();
+    if (!editor) {
+      return;
+    }
+    await vscode.commands.executeCommand("editor.action.wordWrapColumn");
+    await vscode.commands.executeCommand("editor.action.wordWrapColumn");
+    this.refresh(editor);
+  }
+
+  async handleFileInfo() {
+    const editor = this.getEditor();
+    if (!editor) {
+      return;
+    }
+    const document = editor.document;
+    const line = editor.selection.active.line + 1;
+    const total = Math.max(1, document.lineCount);
+    const percent = Math.floor((line / total) * 100);
+    const flags = [
+      document.isDirty ? "modified" : null,
+      document.isReadonly || this.options.readonly ? "readonly" : null
+    ].filter(Boolean).join(", ");
+    const detail = `${document.uri.fsPath || document.fileName} ${flags ? `[${flags}] ` : ""}${line}/${total} ${percent}%`;
+    vscode.window.setStatusBarMessage(detail, 3000);
+  }
+
+  async handleSearchWordForward() {
+    const editor = this.getEditor();
+    if (!editor) {
+      return;
+    }
+    const wordRange = this.currentWordRange(editor.document, this.currentPosition(editor));
+    if (!wordRange) {
+      return;
+    }
+    const pattern = editor.document.getText(wordRange);
+    this.lastSearch = { pattern: `\\b${pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, direction: 1, raw: pattern };
+    await this.runSearch(editor, this.lastSearch.pattern, 1, { regex: true });
+  }
+
+  async handleTagJump() {
+    const editor = this.getEditor();
+    if (!editor) {
+      return;
+    }
+    this.tagStack.push({
+      uri: editor.document.uri.toString(),
+      position: editor.selection.active
+    });
+    await vscode.commands.executeCommand("editor.action.revealDefinition");
+  }
+
+  async handleTagPop() {
+    const entry = this.tagStack.pop();
+    if (!entry) {
+      await vscode.commands.executeCommand("workbench.action.navigateBack");
+      return;
+    }
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(entry.uri));
+    const editor = await vscode.window.showTextDocument(document);
+    editor.selection = new vscode.Selection(entry.position, entry.position);
+    this.refresh(editor);
+  }
+
+  async handleAlternateFile() {
+    if (!this.alternateDocumentUri) {
+      return;
+    }
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(this.alternateDocumentUri));
+    const editor = await vscode.window.showTextDocument(document);
+    this.refresh(editor);
+  }
+
+  async handleWindowCommand() {
+    await vscode.commands.executeCommand("workbench.action.focusNextGroup");
+  }
+
+  async handleSuspendCommand() {
+    await vscode.commands.executeCommand("workbench.action.toggleZenMode");
+  }
+
+  captureCurrentLineState(editor) {
+    if (!editor) {
+      this.trackedLineState = null;
+      return;
+    }
+    const line = editor.selection.active.line;
+    this.trackedLineState = {
+      uri: editor.document.uri.toString(),
+      line,
+      text: editor.document.lineAt(line).text
+    };
+  }
+
+  maybeUpdateTrackedLineState(editor) {
+    if (!editor) {
+      return;
+    }
+    const uri = editor.document.uri.toString();
+    const line = editor.selection.active.line;
+    if (!this.trackedLineState || this.trackedLineState.uri !== uri || this.trackedLineState.line !== line) {
+      this.captureCurrentLineState(editor);
+    }
+  }
+
+  async restoreTrackedLine(editor) {
+    if (!editor || !this.trackedLineState) {
+      return;
+    }
+    const uri = editor.document.uri.toString();
+    const line = editor.selection.active.line;
+    if (this.trackedLineState.uri !== uri || this.trackedLineState.line !== line) {
+      return;
+    }
+    const target = editor.document.lineAt(line).range;
+    await editor.edit((editBuilder) => {
+      editBuilder.replace(target, this.trackedLineState.text);
+    });
+    this.refresh(editor);
+  }
+
+  trackActiveEditor(editor) {
+    if (!editor) {
+      return;
+    }
+    const uri = editor.document.uri.toString();
+    if (this.currentDocumentUri && this.currentDocumentUri !== uri) {
+      this.alternateDocumentUri = this.currentDocumentUri;
+    }
+    this.currentDocumentUri = uri;
+    this.captureCurrentLineState(editor);
   }
 
   rememberEdit(edit) {
@@ -667,11 +977,20 @@ class MviController {
 
   pushCountDigit(key) {
     this.pendingCount = `${this.pendingCount}${key}`;
-    this.statusBar.text = `MVI ${this.mode.toUpperCase()} ${this.pendingCount}`;
+    this.statusBar.text = this.formatStatusBarText(this.pendingCount);
   }
 
   consumeCount() {
     const count = this.pendingCount ? Number(this.pendingCount) : 1;
+    this.pendingCount = "";
+    return count;
+  }
+
+  consumeOptionalCount() {
+    if (!this.pendingCount) {
+      return null;
+    }
+    const count = Number(this.pendingCount);
     this.pendingCount = "";
     return count;
   }
@@ -690,6 +1009,16 @@ class MviController {
     const count = Math.max(1, this.pendingPrefixCount || 1) * Math.max(1, this.consumeCount());
     this.pendingPrefixCount = 1;
     return count;
+  }
+
+  resolvePendingOptionalCount() {
+    const motionCount = this.consumeOptionalCount();
+    const prefixCount = Math.max(1, this.pendingPrefixCount || 1);
+    this.pendingPrefixCount = 1;
+    if (motionCount === null && prefixCount === 1) {
+      return null;
+    }
+    return prefixCount * Math.max(1, motionCount == null ? 1 : motionCount);
   }
 
   recordMacroEvent(event) {
@@ -770,13 +1099,19 @@ class MviController {
     session.endOffset += change.text.length - change.rangeLength;
   }
 
-  async handleNormalInput(editor, key) {
+  async handleNormalInput(editor, key, options = {}) {
+    const { skipRecord = false } = options;
+    if (!this.enabled) {
+      return vscode.commands.executeCommand("default:type", { text: key });
+    }
     if (String(this.mode).startsWith("visual")) {
       await this.handleVisualInput(editor, key);
       return;
     }
     if (this.pendingRegister) {
-      this.recordMacroEvent({ type: "key", key });
+      if (!skipRecord) {
+        this.recordMacroEvent({ type: "key", key });
+      }
       this.selectRegister(key);
       this.refresh(editor);
       return;
@@ -787,22 +1122,28 @@ class MviController {
         : null;
       const allowsMotionCount = pendingType !== "replace-char" && pendingType !== "record-macro" && pendingType !== "play-macro";
       if (allowsMotionCount && this.isCountDigit(key) && (key !== "0" || this.pendingCount)) {
-        this.recordMacroEvent({ type: "key", key });
+        if (!skipRecord) {
+          this.recordMacroEvent({ type: "key", key });
+        }
         this.pushCountDigit(key);
         return;
       }
       if (!(this.pendingOperator && typeof this.pendingOperator === "object" && ["record-macro", "play-macro"].includes(this.pendingOperator.type))) {
-        this.recordMacroEvent({ type: "key", key });
+        if (!skipRecord) {
+          this.recordMacroEvent({ type: "key", key });
+        }
       }
       await this.resolveOperator(editor, key);
       return;
     }
     if (this.isCountDigit(key) && (key !== "0" || this.pendingCount)) {
-      this.recordMacroEvent({ type: "key", key });
+      if (!skipRecord) {
+        this.recordMacroEvent({ type: "key", key });
+      }
       this.pushCountDigit(key);
       return;
     }
-    if (key !== "q") {
+    if (!skipRecord && key !== "q") {
       this.recordMacroEvent({ type: "key", key });
     }
     switch (key) {
@@ -820,6 +1161,11 @@ class MviController {
       case ")":
       case "{":
       case "}":
+      case "+":
+      case "-":
+      case "_":
+      case "|":
+      case "G":
       case "0":
       case "^":
       case "$":
@@ -827,12 +1173,16 @@ class MviController {
       case "H":
       case "M":
       case "L":
-        this.move(editor, key, false, this.consumeCount());
+        this.move(editor, key, false, key === "G" ? this.consumeOptionalCount() : this.consumeCount());
         this.refresh(editor);
+        return;
+      case " ":
+        this.beginPendingCommand({ type: "space-prefix" });
+        this.statusBar.text = this.formatStatusBarText(" ");
         return;
       case "g":
         this.beginPendingCommand({ type: "normal-g" });
-        this.statusBar.text = `MVI ${this.mode.toUpperCase()} g`;
+        this.statusBar.text = this.formatStatusBarText("g");
         return;
       case "i":
         this.rememberEdit({ type: "insert", insert: "before" });
@@ -871,9 +1221,21 @@ class MviController {
         }
         this.refresh(editor);
         return;
+      case "X":
+        {
+          const count = this.consumeCount();
+          this.rememberEdit({ type: "deleteLeftChar", count });
+          await vscode.commands.executeCommand("deleteLeft");
+        }
+        this.refresh(editor);
+        return;
       case "r":
         this.beginPendingCommand({ type: "replace-char" });
-        this.statusBar.text = `MVI ${this.mode.toUpperCase()} r`;
+        this.statusBar.text = this.formatStatusBarText("r");
+        return;
+      case "R":
+        this.rememberEdit({ type: "replaceMode" });
+        await this.setMode("replace");
         return;
       case "s":
         {
@@ -900,6 +1262,9 @@ class MviController {
         await vscode.commands.executeCommand("editor.action.joinLines");
         this.refresh(editor);
         return;
+      case "&":
+        await this.repeatLastSubstitute(editor);
+        return;
       case "/":
         await this.startSearch(editor, 1);
         return;
@@ -911,7 +1276,7 @@ class MviController {
         return;
       case "z":
         this.beginPendingCommand({ type: "z-prefix" });
-        this.statusBar.text = `MVI ${this.mode.toUpperCase()} z`;
+        this.statusBar.text = this.formatStatusBarText("z");
         return;
       case "n":
         await this.repeatSearch(editor, 1, this.consumeCount());
@@ -921,15 +1286,24 @@ class MviController {
         return;
       case "m":
       case "'":
+      case "`":
         this.beginPendingCommand(key);
-        this.statusBar.text = `MVI ${this.mode.toUpperCase()} ${key}`;
+        this.statusBar.text = this.formatStatusBarText(key);
+        return;
+      case "[":
+        this.beginPendingCommand({ type: "section-prefix", direction: "backward" });
+        this.statusBar.text = this.formatStatusBarText("[");
+        return;
+      case "]":
+        this.beginPendingCommand({ type: "section-prefix", direction: "forward" });
+        this.statusBar.text = this.formatStatusBarText("]");
         return;
       case "f":
       case "F":
       case "t":
       case "T":
         this.beginPendingCommand({ type: "find", motion: key });
-        this.statusBar.text = `MVI ${this.mode.toUpperCase()} ${key}`;
+        this.statusBar.text = this.formatStatusBarText(key);
         return;
       case ";":
         await this.repeatFind(editor, false, this.consumeCount());
@@ -939,7 +1313,7 @@ class MviController {
         return;
       case "\"":
         this.pendingRegister = true;
-        this.statusBar.text = `MVI ${this.mode.toUpperCase()} "`;
+        this.statusBar.text = this.formatStatusBarText("\"");
         return;
       case ".":
         await this.repeatLastEdit(editor);
@@ -956,7 +1330,10 @@ class MviController {
         this.refresh(editor);
         return;
       case "Q":
-        await this.enterVisualBlock(editor);
+        await this.openExCommand(editor);
+        return;
+      case "Y":
+        await this.copyCurrentLine(editor, this.consumeCount());
         this.refresh(editor);
         return;
       case "q":
@@ -966,17 +1343,19 @@ class MviController {
           return;
         }
         this.beginPendingCommand({ type: "record-macro" });
-        this.statusBar.text = `MVI ${this.mode.toUpperCase()} q`;
+        this.statusBar.text = this.formatStatusBarText("q");
         return;
       case "@":
         this.beginPendingCommand({ type: "play-macro" });
-        this.statusBar.text = `MVI ${this.mode.toUpperCase()} @`;
+        this.statusBar.text = this.formatStatusBarText("@");
         return;
       case "d":
       case "c":
       case "y":
+      case "<":
+      case ">":
         this.beginPendingCommand(key);
-        this.statusBar.text = `MVI ${this.mode.toUpperCase()} ${key}`;
+        this.statusBar.text = this.formatStatusBarText(key);
         return;
       case "p":
         await this.pasteRegister(editor, false, this.consumeCount());
@@ -989,6 +1368,41 @@ class MviController {
       case "u":
         await vscode.commands.executeCommand("undo");
         this.refresh(editor);
+        return;
+      case "U":
+        await this.restoreTrackedLine(editor);
+        return;
+      case "#":
+        await this.adjustNumberUnderCursor(editor, this.consumeCount(), 1);
+        return;
+      case "\u0001":
+        await this.handleSearchWordForward();
+        return;
+      case "\u000c":
+      case "\u0012":
+        await this.handleScreenRefresh();
+        return;
+      case "\u0007":
+        await this.handleFileInfo();
+        return;
+      case "\u001d":
+        await this.handleTagJump();
+        return;
+      case "\u0014":
+        await this.handleTagPop();
+        return;
+      case "\u0017":
+        await this.handleWindowCommand();
+        return;
+      case "\u001a":
+        await this.handleSuspendCommand();
+        return;
+      case "\u001e":
+        await this.handleAlternateFile();
+        return;
+      case "Z":
+        this.beginPendingCommand({ type: "shift-z" });
+        this.statusBar.text = this.formatStatusBarText("Z");
         return;
       case "~":
         {
@@ -1007,6 +1421,16 @@ class MviController {
     if (this.pendingRegister) {
       this.recordMacroEvent({ type: "key", key });
       this.selectRegister(key);
+      this.refresh(editor);
+      return;
+    }
+    if (this.pendingOperator && typeof this.pendingOperator === "object" && this.pendingOperator.type === "section-prefix") {
+      if (key === (this.pendingOperator.direction === "backward" ? "[" : "]")) {
+        this.move(editor, this.pendingOperator.direction === "backward" ? "[[" : "]]", true, this.resolvePendingCount());
+      } else {
+        this.clearPendingCounts();
+      }
+      this.pendingOperator = null;
       this.refresh(editor);
       return;
     }
@@ -1033,14 +1457,20 @@ class MviController {
       case ")":
       case "{":
       case "}":
-      case "0":
+      case " ":
+      case "+":
+      case "-":
+      case "_":
+      case "|":
+      case "G":
+        case "0":
       case "^":
       case "$":
       case "%":
       case "H":
       case "M":
       case "L":
-        this.move(editor, key, true, this.consumeCount());
+        this.move(editor, key, true, key === "G" ? this.consumeOptionalCount() : this.consumeCount());
         if (this.mode === "visual-line") {
           this.expandVisualLineSelection(editor);
         } else if (this.mode === "visual-block") {
@@ -1050,7 +1480,15 @@ class MviController {
         return;
       case "g":
         this.pendingOperator = { type: "visual-g" };
-        this.statusBar.text = `MVI ${this.mode.toUpperCase()} g`;
+        this.statusBar.text = this.formatStatusBarText("g");
+        return;
+      case "[":
+        this.pendingOperator = { type: "section-prefix", direction: "backward" };
+        this.statusBar.text = this.formatStatusBarText("[");
+        return;
+      case "]":
+        this.pendingOperator = { type: "section-prefix", direction: "forward" };
+        this.statusBar.text = this.formatStatusBarText("]");
         return;
       case "y":
         await this.yankSelection(editor);
@@ -1107,13 +1545,7 @@ class MviController {
         }
         return;
       case "Q":
-        if (this.mode === "visual-block") {
-          await this.setMode("normal");
-          this.collapseToSelectionStart(editor);
-        } else {
-          await this.enterVisualBlock(editor);
-          this.refresh(editor);
-        }
+        await this.openExCommand(editor);
         return;
       case ":":
         await this.openExCommand(editor);
@@ -1144,6 +1576,44 @@ class MviController {
       this.refresh(editor);
       return;
     }
+    if (operator && typeof operator === "object" && operator.type === "shift-z") {
+      if (key === "Z") {
+        await editor.document.save();
+        await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+      }
+      this.refresh(editor);
+      return;
+    }
+    if (operator && typeof operator === "object" && operator.type === "space-prefix") {
+      if (key === "j" || key === "k") {
+        this.pendingOperator = {
+          type: "space-scroll",
+          direction: key === "j" ? "down" : "up",
+          firstKey: key
+        };
+        this.statusBar.text = this.formatStatusBarText(` ${key}`);
+        return;
+      }
+      this.move(editor, " ", false, this.resolvePendingCount());
+      this.refresh(editor);
+      await this.handleNormalInput(editor, key, { skipRecord: true });
+      return;
+    }
+    if (operator && typeof operator === "object" && operator.type === "space-scroll") {
+      if (key === (operator.direction === "down" ? "j" : "k")) {
+        const count = this.resolvePendingCount();
+        for (let i = 0; i < count; i += 1) {
+          await this.handlePageMove(operator.direction === "down");
+        }
+        this.refresh(editor);
+        return;
+      }
+      this.move(editor, " ", false, this.resolvePendingCount());
+      this.refresh(editor);
+      await this.handleNormalInput(editor, operator.firstKey, { skipRecord: true });
+      await this.handleNormalInput(editor, key, { skipRecord: true });
+      return;
+    }
     if (operator && typeof operator === "object" && operator.type === "z-prefix") {
       if (key === "=") {
         await this.showSpellingSuggestions(editor);
@@ -1165,14 +1635,33 @@ class MviController {
           this.expandVisualLineSelection(editor);
         }
         this.clearPendingCounts();
+      } else if (key === "g") {
+        const count = this.resolvePendingOptionalCount();
+        this.move(editor, "G", operator.type === "visual-g", count == null ? 1 : count);
+        if (this.mode === "visual-line") {
+          this.expandVisualLineSelection(editor);
+        }
+        this.clearPendingCounts();
       }
       this.refresh(editor);
       return;
     }
     if ((operator === "d" || operator === "c" || operator === "y") && ["f", "F", "t", "T"].includes(key)) {
       this.pendingOperator = { type: "operator-find", operator, motion: key };
-      this.statusBar.text = `MVI ${this.mode.toUpperCase()} ${operator}${key}`;
+      this.statusBar.text = this.formatStatusBarText(`${operator}${key}`);
       return;
+    }
+    if (operator === "<" || operator === ">") {
+      if (key === operator) {
+        await this.shiftLines(editor, operator === ">" ? 1 : -1, this.resolvePendingCount());
+        this.refresh(editor);
+        return;
+      }
+      if (["h", "j", "k", "l", "w", "b", "e", "W", "B", "E", "(", ")", "{", "}", " ", "+", "-", "_", "|", "0", "^", "$", "%", "H", "M", "L", "G", "f", "F", "t", "T", "[[", "]]"].includes(key)) {
+        await this.applyShiftOperator(editor, operator === ">" ? 1 : -1, key, key === "G" ? this.resolvePendingOptionalCount() : this.resolvePendingCount());
+        this.refresh(editor);
+        return;
+      }
     }
     if (operator && typeof operator === "object" && operator.type === "operator-find") {
       await this.applyOperatorToFind(editor, operator.operator, operator.motion, key);
@@ -1181,7 +1670,7 @@ class MviController {
     }
     if ((operator === "d" || operator === "c" || operator === "y") && (key === "i" || key === "a")) {
       this.pendingOperator = { type: "text-object", operator, kind: key };
-      this.statusBar.text = `MVI ${this.mode.toUpperCase()} ${operator}${key}`;
+      this.statusBar.text = this.formatStatusBarText(`${operator}${key}`);
       return;
     }
     if (operator && typeof operator === "object" && operator.type === "text-object") {
@@ -1213,13 +1702,70 @@ class MviController {
       return;
     }
     if (operator === "'") {
-      this.jumpToMark(editor, key);
+      this.jumpToMark(editor, key, false);
+      this.refresh(editor);
+      return;
+    }
+    if (operator === "`") {
+      this.jumpToMark(editor, key, true);
+      this.refresh(editor);
+      return;
+    }
+    if (operator && typeof operator === "object" && operator.type === "section-prefix") {
+      if (key === (operator.direction === "backward" ? "[" : "]")) {
+        this.move(editor, operator.direction === "backward" ? "[[" : "]]", false, this.resolvePendingCount());
+      } else {
+        this.clearPendingCounts();
+      }
+      this.refresh(editor);
+      return;
+    }
+    if (operator === "d" || operator === "c" || operator === "y") {
+      if (key === "[") {
+        this.pendingOperator = { type: "operator-section", operator, motion: "[[" };
+        this.statusBar.text = this.formatStatusBarText(`${operator}[`);
+        return;
+      }
+      if (key === "]") {
+        this.pendingOperator = { type: "operator-section", operator, motion: "]]" };
+        this.statusBar.text = this.formatStatusBarText(`${operator}]`);
+        return;
+      }
+    }
+    if (operator && typeof operator === "object" && operator.type === "operator-section") {
+      const expectedKey = operator.motion === "[[" ? "[" : "]";
+      if (key === expectedKey) {
+        const count = this.resolvePendingCount();
+        if (operator.operator === "d") {
+          this.rememberEdit({ type: "motionDelete", motion: operator.motion, count });
+        } else if (operator.operator === "c") {
+          this.rememberEdit({ type: "motionChange", motion: operator.motion, count });
+        }
+        await this.applyOperatorToMotion(editor, operator.operator, operator.motion, count);
+      } else {
+        this.clearPendingCounts();
+      }
+      this.refresh(editor);
+      return;
+    }
+    if ((operator === "<" || operator === ">") && (key === "[" || key === "]")) {
+      this.pendingOperator = { type: "operator-section-shift", operator, motion: key === "[" ? "[[" : "]]" };
+      this.statusBar.text = this.formatStatusBarText(`${operator}${key}`);
+      return;
+    }
+    if (operator && typeof operator === "object" && operator.type === "operator-section-shift") {
+      const expectedKey = operator.motion === "[[" ? "[" : "]";
+      if (key === expectedKey) {
+        await this.applyShiftOperator(editor, operator.operator === ">" ? 1 : -1, operator.motion, this.resolvePendingCount());
+      } else {
+        this.clearPendingCounts();
+      }
       this.refresh(editor);
       return;
     }
     if (key === "g") {
       this.pendingOperator = { type: "g-prefix", operator };
-      this.statusBar.text = `MVI ${this.mode.toUpperCase()} ${operator}g`;
+      this.statusBar.text = this.formatStatusBarText(`${operator}g`);
       return;
     }
     if (operator && typeof operator === "object" && operator.type === "g-prefix") {
@@ -1239,8 +1785,8 @@ class MviController {
       this.refresh(editor);
       return;
     }
-    if (["h", "j", "k", "l", "w", "b", "e", "W", "B", "E", "(", ")", "{", "}", "0", "^", "$", "%", "H", "M", "L", "f", "F", "t", "T"].includes(key)) {
-      const count = this.resolvePendingCount();
+    if (["h", "j", "k", "l", "w", "b", "e", "W", "B", "E", "(", ")", "{", "}", " ", "+", "-", "_", "|", "0", "^", "$", "%", "H", "M", "L", "G", "f", "F", "t", "T"].includes(key)) {
+      const count = key === "G" ? this.resolvePendingOptionalCount() : this.resolvePendingCount();
       if (operator === "d") {
         this.rememberEdit({ type: "motionDelete", motion: key, count });
       } else if (operator === "c") {
@@ -1266,11 +1812,12 @@ class MviController {
   move(editor, key, selecting = false, count = 1) {
     const document = editor.document;
     let next = this.currentPosition(editor);
-    for (let i = 0; i < Math.max(1, count); i += 1) {
+    for (let i = 0; i < Math.max(1, count == null ? 1 : count); i += 1) {
       switch (key) {
         case "h":
           next = next.translate(0, -1);
           break;
+        case " ":
         case "l":
           next = next.translate(0, 1);
           break;
@@ -1280,14 +1827,46 @@ class MviController {
         case "k":
           next = new vscode.Position(Math.max(next.line - 1, 0), next.character);
           break;
+        case "+":
+          next = new vscode.Position(
+            Math.min(next.line + 1, document.lineCount - 1),
+            this.firstNonWhitespace(document.lineAt(Math.min(next.line + 1, document.lineCount - 1)).text)
+          );
+          break;
+        case "-":
+          next = new vscode.Position(
+            Math.max(next.line - 1, 0),
+            this.firstNonWhitespace(document.lineAt(Math.max(next.line - 1, 0)).text)
+          );
+          break;
+        case "_":
+          next = new vscode.Position(
+            Math.min(next.line + Math.max(0, (count == null ? 1 : count) - 1), document.lineCount - 1),
+            this.firstNonWhitespace(document.lineAt(Math.min(next.line + Math.max(0, (count == null ? 1 : count) - 1), document.lineCount - 1)).text)
+          );
+          i = count == null ? 1 : count;
+          break;
         case "0":
           next = new vscode.Position(next.line, 0);
+          break;
+        case "|":
+          next = new vscode.Position(next.line, Math.max(0, (count == null ? 1 : count) - 1));
+          i = count == null ? 1 : count;
           break;
         case "^":
           next = new vscode.Position(next.line, this.firstNonWhitespace(document.lineAt(next.line).text));
           break;
         case "$":
           next = new vscode.Position(next.line, document.lineAt(next.line).text.length);
+          break;
+        case "G":
+          {
+            const targetLine = count == null
+              ? this.maxNavigableLine(document)
+              : Math.max(0, Math.min(document.lineCount - 1, count - 1));
+            next = new vscode.Position(targetLine, this.firstNonWhitespace(document.lineAt(targetLine).text));
+            i = count == null ? 1 : count;
+          }
           break;
         case "w":
           next = this.nextWordStart(document, next);
@@ -1318,6 +1897,12 @@ class MviController {
           break;
         case "}":
           next = this.nextParagraphStart(document, next);
+          break;
+        case "[[":
+          next = this.previousSectionStart(document, next);
+          break;
+        case "]]":
+          next = this.nextSectionStart(document, next);
           break;
         case "ge":
           next = this.previousWordEnd(document, next);
@@ -1519,21 +2104,17 @@ class MviController {
   }
 
   async startSearch(editor, direction) {
-    const prompt = direction > 0 ? "/" : "?";
-    const value = await vscode.window.showInputBox({
-      prompt: `${prompt} Search`,
-      value: this.lastSearch ? this.lastSearch.pattern : ""
-    });
-    if (!value) {
-      this.refresh(editor);
-      return;
-    }
-    this.lastSearch = { pattern: value, direction };
-    await this.runSearch(editor, value, direction);
+    this.exCommandLine = {
+      prefix: direction > 0 ? "/" : "?",
+      value: ""
+    };
+    await this.setContext(EX_CONTEXT_KEY, true);
+    this.updateStatusBar();
+    this.refresh(editor);
   }
 
   async openExCommand(editor) {
-    this.exCommandLine = { value: this.exVisualRangePrefix(editor) };
+    this.exCommandLine = { prefix: ":", value: this.exVisualRangePrefix(editor) };
     await this.setContext(EX_CONTEXT_KEY, true);
     this.updateStatusBar();
     this.refresh(editor);
@@ -1548,71 +2129,204 @@ class MviController {
       return;
     }
     const { range, command: exCommand } = parsed;
-    if (!exCommand) {
+    const ex = exCommand.trim();
+    const lower = ex.toLowerCase();
+    if (!ex) {
       if (range) {
         this.jumpToLine(editor, range.end);
       }
       return;
     }
-    if (exCommand === "u" || exCommand === "undo") {
+    if (lower === "u" || lower === "undo") {
       await vscode.commands.executeCommand("undo");
       return;
     }
-    if (exCommand === "set spell") {
-      await this.setSpellEnabled(editor, true);
+    if (lower.startsWith("set")) {
+      await this.executeSetCommand(ex.slice(3).trim());
       return;
     }
-    if (exCommand === "set nospell") {
-      await this.setSpellEnabled(editor, false);
-      return;
-    }
-    if (exCommand === "set spell?") {
-      vscode.window.setStatusBarMessage(`mvi spell ${this.spellEnabled ? "on" : "off"}`, 2000);
-      return;
-    }
-    if (exCommand === "redo") {
+    if (lower === "redo") {
       await vscode.commands.executeCommand("redo");
       return;
     }
-    if (exCommand === "e!" || exCommand === "edit!") {
+    if (/^(e|edit)(!?)(\s+(.+))?$/i.test(ex)) {
+      const match = ex.match(/^(e|edit)(!?)(\s+(.+))?$/i);
+      const fileArg = match && match[4] ? match[4].trim() : "";
+      if (fileArg) {
+        await this.openEditorPath(editor, fileArg);
+      } else {
+        await vscode.commands.executeCommand("workbench.action.files.revert");
+      }
+      return;
+    }
+    if (/^(w|write)(\s+(.+))?$/i.test(ex)) {
+      const match = ex.match(/^(w|write)(\s+(.+))?$/i);
+      const fileArg = match && match[3] ? match[3].trim() : "";
+      if (fileArg) {
+        const target = this.resolvePath(editor, fileArg);
+        await vscode.workspace.fs.writeFile(target, Buffer.from(editor.document.getText(), "utf8"));
+      } else {
+        await editor.document.save();
+      }
+      return;
+    }
+    if (/^!/.test(ex)) {
+      await this.executeFilterShellCommand(editor, range || this.currentLineRange(editor), ex.slice(1).trim());
+      return;
+    }
+    if (/^r\s*!/i.test(ex)) {
+      await this.executeReadShellCommand(editor, range || this.currentLineRange(editor), ex.replace(/^r\s*!/i, "").trim());
+      return;
+    }
+    if (/^(r|read)\s+.+$/i.test(ex)) {
+      await this.executeReadFile(editor, range || this.currentLineRange(editor), ex.replace(/^(r|read)\s+/i, "").trim());
+      return;
+    }
+    if (lower === "q" || lower === "q!") {
+      await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+      return;
+    }
+    if (lower === "wq" || lower === "x") {
+      await editor.document.save();
+      await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+      return;
+    }
+    if (lower === "preserve") {
+      await editor.document.save();
+      return;
+    }
+    if (lower.startsWith("recover")) {
       await vscode.commands.executeCommand("workbench.action.files.revert");
       return;
     }
-    if (exCommand === "w") {
-      await editor.document.save();
-      return;
-    }
-    if (/^!/.test(exCommand)) {
-      await this.executeFilterShellCommand(editor, range || this.currentLineRange(editor), exCommand.slice(1).trim());
-      return;
-    }
-    if (/^r\s*!/.test(exCommand)) {
-      await this.executeReadShellCommand(editor, range || this.currentLineRange(editor), exCommand.replace(/^r\s*!/, "").trim());
-      return;
-    }
-    if (exCommand === "q" || exCommand === "q!") {
-      await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
-      return;
-    }
-    if (exCommand === "wq" || exCommand === "x") {
-      await editor.document.save();
-      await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
-      return;
-    }
-    if (exCommand === "d" || exCommand === "delete") {
+    if (lower === "d" || lower === "delete") {
       await this.executeDeleteRange(editor, range || this.currentLineRange(editor));
       return;
     }
-    if (exCommand === "y" || exCommand === "yank") {
+    if (lower === "y" || lower === "yank") {
       await this.executeYankRange(editor, range || this.currentLineRange(editor));
       return;
     }
-    if (exCommand === "j" || exCommand === "join") {
+    if (lower === "j" || lower === "join") {
       await this.executeJoinRange(editor, range || this.currentLineRange(editor));
       return;
     }
-    if (/^s./.test(exCommand)) {
-      await this.executeSubstitute(editor, exCommand, range);
+    if (/^s./i.test(ex)) {
+      await this.executeSubstitute(editor, ex, range);
+      return;
+    }
+    if (lower === "&") {
+      await this.repeatLastSubstitute(editor);
+      return;
+    }
+    if (lower === "file" || lower === "f") {
+      vscode.window.setStatusBarMessage(editor.document.uri.fsPath || editor.document.fileName, 3000);
+      return;
+    }
+    if (/^(n|next)\b/i.test(ex)) {
+      await this.navigateArguments(editor, 1);
+      return;
+    }
+    if (/^(prev|previous)\b/i.test(ex)) {
+      await this.navigateArguments(editor, -1);
+      return;
+    }
+    if (/^(rew|rewind)\b/i.test(ex)) {
+      await this.rewindArguments(editor);
+      return;
+    }
+    if (/^(args|ar)\b/i.test(ex)) {
+      this.showOutput("Arguments", this.argumentList(editor).map((uri) => uri.fsPath));
+      return;
+    }
+    if (/^(pu|put)\b/i.test(ex)) {
+      const match = ex.match(/^(pu|put)(\s+(.+))?$/i);
+      await this.executePut(editor, (range || this.currentLineRange(editor)).end, match && match[3] ? match[3].trim() : null);
+      return;
+    }
+    if (/^(co|copy|t)\b/i.test(ex)) {
+      const match = ex.match(/^(co|copy|t)\s+(.+)$/i);
+      if (match) {
+        const destination = this.parseExAddress(editor, match[2].trim());
+        if (destination != null) {
+          await this.executeCopyRange(editor, range || this.currentLineRange(editor), destination);
+        }
+      }
+      return;
+    }
+    if (/^(m|move)\b/i.test(ex)) {
+      const match = ex.match(/^(m|move)\s+(.+)$/i);
+      if (match) {
+        const destination = this.parseExAddress(editor, match[2].trim());
+        if (destination != null) {
+          await this.executeMoveRange(editor, range || this.currentLineRange(editor), destination);
+        }
+      }
+      return;
+    }
+    if (/^>{1,}$/.test(ex) || /^<{1,}$/.test(ex)) {
+      await this.shiftLineRange(editor, (range || this.currentLineRange(editor)).start, (range || this.currentLineRange(editor)).end, ex.startsWith(">") ? 1 : -1);
+      return;
+    }
+    if (ex === "=") {
+      vscode.window.setStatusBarMessage(String((range || this.currentLineRange(editor)).end + 1), 2000);
+      return;
+    }
+    if (/^(p|print)\b/i.test(ex)) {
+      this.showExRange(editor, range || this.currentLineRange(editor), "print");
+      return;
+    }
+    if (/^(l|list)\b/i.test(ex)) {
+      this.showExRange(editor, range || this.currentLineRange(editor), "list");
+      return;
+    }
+    if (/^(nu|number|#)\b/i.test(ex)) {
+      this.showExRange(editor, range || this.currentLineRange(editor), "number");
+      return;
+    }
+    if (/^(g|global|v)\//i.test(ex)) {
+      await this.executeGlobal(editor, range || { start: 0, end: editor.document.lineCount - 1 }, ex);
+      return;
+    }
+    if (/^(k|mark)\s+[A-Za-z]$/i.test(ex)) {
+      this.setMark(ex.trim().slice(-1), new vscode.Position((range || this.currentLineRange(editor)).start, 0));
+      return;
+    }
+    if (/^so(u|urce)?\b/i.test(ex)) {
+      await this.executeSource(editor, ex.replace(/^so(u|urce)?\s*/i, "").trim());
+      return;
+    }
+    if (/^sh(e|el|ell)?\b/i.test(ex)) {
+      this.executeShellCommand();
+      return;
+    }
+    if (/^h(e|el|elp)?\b/i.test(ex)) {
+      this.showHelp();
+      return;
+    }
+    if (/^ve(r|rs|rsi|rsio|rsion)?\b/i.test(ex)) {
+      this.showVersion();
+      return;
+    }
+    if (/^ta(g)?\b/i.test(ex)) {
+      await this.handleTagJump();
+      return;
+    }
+    if (/^tagp(op)?\b/i.test(ex)) {
+      await this.handleTagPop();
+      return;
+    }
+    if (/^tagn(ext)?\b/i.test(ex)) {
+      await vscode.commands.executeCommand("workbench.action.navigateForward");
+      return;
+    }
+    if (/^tagpr(ev)?\b/i.test(ex)) {
+      await vscode.commands.executeCommand("workbench.action.navigateBack");
+      return;
+    }
+    if (/^tagt(op)?\b/i.test(ex)) {
+      this.tagStack = [];
+      return;
     }
   }
 
@@ -1677,6 +2391,166 @@ class MviController {
     });
   }
 
+  resolvePath(editor, fileArg) {
+    if (/^\w+:/.test(fileArg)) {
+      return vscode.Uri.parse(fileArg);
+    }
+    const path = require("path");
+    return vscode.Uri.file(path.resolve(path.dirname(editor.document.uri.fsPath), fileArg));
+  }
+
+  async openEditorPath(editor, fileArg) {
+    const target = this.resolvePath(editor, fileArg);
+    const document = await vscode.workspace.openTextDocument(target);
+    await vscode.window.showTextDocument(document);
+  }
+
+  async executeReadFile(editor, range, fileArg) {
+    if (!fileArg) {
+      return;
+    }
+    const target = this.resolvePath(editor, fileArg);
+    const bytes = await vscode.workspace.fs.readFile(target);
+    const text = Buffer.from(bytes).toString("utf8");
+    const insertLine = Math.min(editor.document.lineCount, range.end + 1);
+    await editor.edit((editBuilder) => {
+      editBuilder.insert(new vscode.Position(insertLine, 0), text.endsWith("\n") ? text : `${text}\n`);
+    });
+  }
+
+  argumentList(editor) {
+    return vscode.workspace.textDocuments
+      .filter((document) => document.uri.scheme === "file")
+      .map((document) => document.uri)
+      .sort((left, right) => left.fsPath.localeCompare(right.fsPath));
+  }
+
+  async navigateArguments(editor, direction) {
+    const args = this.argumentList(editor);
+    const current = args.findIndex((uri) => uri.toString() === editor.document.uri.toString());
+    if (current === -1 || !args.length) {
+      return;
+    }
+    const next = (current + direction + args.length) % args.length;
+    const document = await vscode.workspace.openTextDocument(args[next]);
+    await vscode.window.showTextDocument(document);
+  }
+
+  async rewindArguments(editor) {
+    const args = this.argumentList(editor);
+    if (!args.length) {
+      return;
+    }
+    const document = await vscode.workspace.openTextDocument(args[0]);
+    await vscode.window.showTextDocument(document);
+  }
+
+  async executePut(editor, line, registerName) {
+    if (registerName) {
+      this.selectedRegister = registerName;
+    }
+    await this.pasteRegister(editor, false, 1);
+    this.jumpToLine(editor, Math.min(line + 1, editor.document.lineCount - 1));
+  }
+
+  async executeCopyRange(editor, range, destination) {
+    const text = editor.document.getText(this.lineRange(editor, range.start, range.end));
+    const insertPosition = new vscode.Position(Math.min(destination + 1, editor.document.lineCount), 0);
+    await editor.edit((editBuilder) => {
+      editBuilder.insert(insertPosition, text.endsWith("\n") ? text : `${text}\n`);
+    });
+  }
+
+  async executeMoveRange(editor, range, destination) {
+    const text = editor.document.getText(this.lineRange(editor, range.start, range.end));
+    await this.executeDeleteRange(editor, range);
+    const insertPosition = new vscode.Position(Math.min(destination + 1, editor.document.lineCount), 0);
+    await editor.edit((editBuilder) => {
+      editBuilder.insert(insertPosition, text.endsWith("\n") ? text : `${text}\n`);
+    });
+  }
+
+  showOutput(title, lines) {
+    this.outputChannel.clear();
+    this.outputChannel.appendLine(title);
+    for (const line of lines) {
+      this.outputChannel.appendLine(String(line));
+    }
+    this.outputChannel.show(true);
+  }
+
+  showExRange(editor, range, mode) {
+    const lines = [];
+    for (let line = range.start; line <= range.end; line += 1) {
+      let text = editor.document.lineAt(line).text;
+      if (mode === "list") {
+        text = text.replace(/\t/g, "\\t").replace(/ /g, "·");
+      }
+      if (mode === "number") {
+        text = `${line + 1}\t${text}`;
+      }
+      lines.push(text);
+    }
+    this.showOutput(`:${mode}`, lines);
+  }
+
+  async executeGlobal(editor, range, ex) {
+    const match = ex.match(/^(g|global|v)\/(.*)\/\s*(.*)$/i);
+    if (!match) {
+      return;
+    }
+    const invert = /^v/i.test(match[1]);
+    const regex = new RegExp(match[2], this.searchFlags());
+    const command = match[3] || "print";
+    const matchingLines = [];
+    for (let line = range.start; line <= range.end; line += 1) {
+      const hit = regex.test(editor.document.lineAt(line).text);
+      regex.lastIndex = 0;
+      if (hit !== invert) {
+        matchingLines.push(line);
+      }
+    }
+    if (/^(p|print|l|list|nu|number|#)$/i.test(command)) {
+      this.showOutput(":global", matchingLines.map((line) => `${line + 1}\t${editor.document.lineAt(line).text}`));
+      return;
+    }
+    for (let index = matchingLines.length - 1; index >= 0; index -= 1) {
+      await this.executeExCommand(editor, `${matchingLines[index] + 1}${command}`);
+    }
+  }
+
+  async executeSource(editor, fileArg) {
+    if (!fileArg) {
+      return;
+    }
+    const target = this.resolvePath(editor, fileArg);
+    const bytes = await vscode.workspace.fs.readFile(target);
+    const text = Buffer.from(bytes).toString("utf8");
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("\"")) {
+        continue;
+      }
+      await this.executeExCommand(editor, trimmed);
+    }
+  }
+
+  executeShellCommand() {
+    const terminal = vscode.window.createTerminal("MVI Shell");
+    terminal.show();
+  }
+
+  showHelp() {
+    this.showOutput("MVI Help", [
+      "Supported ex commands:",
+      "write, quit, wq, x, edit, read, delete, yank, join, substitute, put, copy, move, print, list, number, global, v, mark, source, shell, help, version, args, next, previous, rewind, tag, tagpop, preserve, recover, set"
+    ]);
+  }
+
+  showVersion() {
+    vscode.window.setStatusBarMessage("MVI 0.0.1", 3000);
+  }
+
   parseExCommand(editor, command) {
     const trimmed = command.trim();
     if (!trimmed) {
@@ -1688,43 +2562,111 @@ class MviController {
         command: trimmed.slice(1).trim()
       };
     }
-    const match = trimmed.match(/^(('<|'>|[.$]|\d+))(?:,(?<end>'<|'>|[.$]|\d+))?(?:\s*(?<command>.*))?$/);
-    if (!match) {
+    const first = this.consumeExAddress(editor, trimmed);
+    if (!first) {
       return { range: null, command: trimmed };
     }
-    const start = this.parseExAddress(editor, match[1]);
-    const end = this.parseExAddress(editor, match.groups?.end || match[1]);
-    if (start === null || end === null) {
-      return { range: null, command: trimmed };
+    let start = first.address;
+    let end = first.address;
+    let index = first.index;
+    if (trimmed[index] === "," || trimmed[index] === ";") {
+      const next = this.consumeExAddress(editor, trimmed.slice(index + 1));
+      if (next) {
+        end = next.address;
+        index += 1 + next.index;
+      }
     }
     return {
       range: { start: Math.min(start, end), end: Math.max(start, end) },
-      command: (match.groups?.command || "").trim()
+      command: trimmed.slice(index).trim()
     };
   }
 
   parseExAddress(editor, token) {
-    if (!token) {
+    const consumed = this.consumeExAddress(editor, String(token || "").trim());
+    return consumed ? consumed.address : null;
+  }
+
+  consumeExAddress(editor, text) {
+    const source = String(text || "");
+    if (!source) {
       return null;
     }
-    if (token === "'<" || token === "'>") {
+    let index = 0;
+    let base = null;
+    if (source.startsWith("'<") || source.startsWith("'>")) {
       const range = this.exSelectionLineRange(editor);
       if (!range) {
         return null;
       }
-      return token === "'<" ? range.start : range.end;
+      base = source.startsWith("'<") ? range.start : range.end;
+      index = 2;
+    } else if (/^'[A-Za-z]/.test(source)) {
+      const mark = this.marks.get(source[1]);
+      if (!mark) {
+        return null;
+      }
+      base = mark.line;
+      index = 2;
+    } else if (source[0] === ".") {
+      base = editor.selection.active.line;
+      index = 1;
+    } else if (source[0] === "$") {
+      base = Math.max(0, editor.document.lineCount - 1);
+      index = 1;
+    } else if (source[0] === "/" || source[0] === "?") {
+      const parsed = this.consumeDelimitedPattern(source);
+      if (!parsed) {
+        return null;
+      }
+      const position = this.findSearchPosition(editor.document, editor.selection.active, parsed.value, source[0] === "/" ? 1 : -1);
+      if (!position) {
+        return null;
+      }
+      base = position.line;
+      index = parsed.index;
+    } else {
+      const number = source.match(/^\d+/);
+      if (!number) {
+        return null;
+      }
+      base = Math.max(0, Math.min(editor.document.lineCount - 1, Number(number[0]) - 1));
+      index = number[0].length;
     }
-    if (token === ".") {
-      return editor.selection.active.line;
+    while (true) {
+      const offset = source.slice(index).match(/^\s*([+-])\s*(\d*)/);
+      if (!offset) {
+        break;
+      }
+      const amount = offset[2] ? Number(offset[2]) : 1;
+      base += offset[1] === "+" ? amount : -amount;
+      index += offset[0].length;
     }
-    if (token === "$") {
-      return Math.max(0, editor.document.lineCount - 1);
+    base = Math.max(0, Math.min(editor.document.lineCount - 1, base));
+    return { address: base, index };
+  }
+
+  consumeDelimitedPattern(text) {
+    const delimiter = text[0];
+    let escaped = false;
+    let value = "";
+    for (let index = 1; index < text.length; index += 1) {
+      const char = text[index];
+      if (escaped) {
+        value += char;
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === delimiter) {
+        return { value, index: index + 1 };
+      }
+      value += char;
     }
-    if (/^\d+$/.test(token)) {
-      const line = Number(token) - 1;
-      return Math.max(0, Math.min(line, editor.document.lineCount - 1));
-    }
-    return null;
+    return { value, index: text.length };
   }
 
   currentLineRange(editor) {
@@ -1846,6 +2788,54 @@ class MviController {
     this.jumpToLine(editor, range.start);
   }
 
+  indentationUnit() {
+    if (this.options.expandtab) {
+      return " ".repeat(Math.max(1, this.options.shiftwidth));
+    }
+    return "\t";
+  }
+
+  outdentText(text) {
+    if (text.startsWith("\t")) {
+      return text.slice(1);
+    }
+    const width = Math.max(1, this.options.shiftwidth);
+    let count = 0;
+    while (count < width && text[count] === " ") {
+      count += 1;
+    }
+    return text.slice(count);
+  }
+
+  async shiftLines(editor, direction, count = 1) {
+    const line = editor.selection.active.line;
+    const endLine = Math.min(editor.document.lineCount - 1, line + Math.max(1, count) - 1);
+    await this.shiftLineRange(editor, line, endLine, direction);
+  }
+
+  async applyShiftOperator(editor, direction, motion, count = 1) {
+    const start = this.currentPosition(editor);
+    const end = this.computeMotionTarget(editor.document, start, motion, count);
+    await this.shiftLineRange(editor, Math.min(start.line, end.line), Math.max(start.line, end.line), direction);
+  }
+
+  async shiftLineRange(editor, startLine, endLine, direction) {
+    const replacements = [];
+    for (let line = startLine; line <= endLine; line += 1) {
+      const text = editor.document.lineAt(line).text;
+      replacements.push({
+        line,
+        text: direction > 0 ? `${this.indentationUnit()}${text}` : this.outdentText(text)
+      });
+    }
+    await editor.edit((editBuilder) => {
+      for (const replacement of replacements) {
+        editBuilder.replace(editor.document.lineAt(replacement.line).range, replacement.text);
+      }
+    });
+    this.jumpToLine(editor, startLine);
+  }
+
   async executeSubstitute(editor, command, explicitRange = null) {
     const parsed = this.parseSubstituteCommand(command);
     if (!parsed) {
@@ -1854,7 +2844,7 @@ class MviController {
     const { pattern, replacement, flags } = parsed;
     let regex;
     try {
-      regex = new RegExp(pattern, flags.includes("g") ? "g" : "");
+      regex = new RegExp(pattern, this.searchFlags(flags.includes("g") ? "g" : ""));
     } catch (_error) {
       return;
     }
@@ -1865,6 +2855,7 @@ class MviController {
     if (next === text) {
       return;
     }
+    this.lastSubstitute = { pattern, replacement, flags };
     await editor.edit((editBuilder) => {
       editBuilder.replace(range, next);
     });
@@ -1914,43 +2905,174 @@ class MviController {
       return;
     }
     for (let i = 0; i < Math.max(1, count); i += 1) {
-      await this.runSearch(editor, this.lastSearch.pattern, this.lastSearch.direction * directionFactor);
+      await this.runSearch(editor, this.lastSearch.pattern, this.lastSearch.direction * directionFactor, { regex: true });
     }
   }
 
-  async runSearch(editor, pattern, direction) {
+  searchFlags(extra = "") {
+    const parts = new Set(extra ? extra.split("") : []);
+    if (this.options.ignorecase) {
+      parts.add("i");
+    }
+    parts.add("g");
+    return [...parts].join("");
+  }
+
+  parseSearchSpec(value, direction) {
+    const text = String(value || "").trim();
+    if (!text) {
+      return this.lastSearch ? { ...this.lastSearch, direction } : null;
+    }
+    const match = text.match(/^(.*?)(?:\s*([+-]\d+))?(?:\s*z)?$/);
+    const raw = match ? match[1] : text;
+    return {
+      raw,
+      pattern: raw,
+      direction,
+      offset: match && match[2] ? Number(match[2]) : 0
+    };
+  }
+
+  findSearchPosition(document, start, pattern, direction) {
+    const fullText = document.getText();
+    let compiled;
+    try {
+      compiled = new RegExp(pattern, this.searchFlags());
+    } catch (_error) {
+      return null;
+    }
+    const currentOffset = document.offsetAt(start);
+    let match = null;
+    if (direction > 0) {
+      compiled.lastIndex = Math.min(fullText.length, currentOffset + 1);
+      match = compiled.exec(fullText);
+      if (!match && this.options.wrapscan) {
+        compiled.lastIndex = 0;
+        match = compiled.exec(fullText);
+      }
+    } else {
+      let currentMatch;
+      while ((currentMatch = compiled.exec(fullText))) {
+        if (currentMatch.index >= currentOffset) {
+          break;
+        }
+        match = currentMatch;
+      }
+      if (!match && this.options.wrapscan) {
+        while ((currentMatch = compiled.exec(fullText))) {
+          match = currentMatch;
+        }
+      }
+    }
+    return match ? document.positionAt(match.index) : null;
+  }
+
+  async executeSetCommand(argument) {
+    const text = String(argument || "").trim();
+    if (!text) {
+      this.showOutput(":set", Object.entries(this.options).map(([key, value]) => `${key}=${value}`));
+      return;
+    }
+    if (text === "all") {
+      this.showOutput(":set all", Object.entries(this.options).map(([key, value]) => `${key}=${value}`));
+      return;
+    }
+    const alias = {
+      nu: "number",
+      ic: "ignorecase",
+      ws: "wrapscan",
+      smd: "showmode",
+      sw: "shiftwidth",
+      ts: "tabstop",
+      et: "expandtab",
+      ai: "autoindent",
+      ro: "readonly"
+    };
+    for (const token of text.split(/\s+/)) {
+      if (!token) {
+        continue;
+      }
+      if (token === "spell") {
+        this.spellEnabled = true;
+        continue;
+      }
+      if (token === "nospell") {
+        this.spellEnabled = false;
+        continue;
+      }
+      if (token === "spell?") {
+        vscode.window.setStatusBarMessage(`mvi spell ${this.spellEnabled ? "on" : "off"}`, 2000);
+        continue;
+      }
+      if (token.endsWith("?")) {
+        const key = alias[token.slice(0, -1)] || token.slice(0, -1);
+        if (key in this.options) {
+          vscode.window.setStatusBarMessage(`${key}=${this.options[key]}`, 2000);
+        }
+        continue;
+      }
+      if (token.includes("=")) {
+        const [rawKey, rawValue] = token.split("=");
+        const key = alias[rawKey] || rawKey;
+        if (key in this.options) {
+          const value = /^\d+$/.test(rawValue) ? Number(rawValue) : rawValue === "true";
+          this.options[key] = value;
+        }
+        continue;
+      }
+      if (token.startsWith("no")) {
+        const key = alias[token.slice(2)] || token.slice(2);
+        if (key in this.options) {
+          this.options[key] = false;
+        }
+        continue;
+      }
+      const key = alias[token] || token;
+      if (key in this.options) {
+        this.options[key] = true;
+      }
+    }
+    this.updateStatusBar();
+  }
+
+  async runSearch(editor, pattern, direction, { regex = true, offset = 0 } = {}) {
     const document = editor.document;
     const fullText = document.getText();
     if (!fullText) {
       return;
     }
-    const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const regex = new RegExp(escaped, "g");
+    const expression = regex ? pattern : pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    let compiled;
+    try {
+      compiled = new RegExp(expression, this.searchFlags());
+    } catch (_error) {
+      return;
+    }
     const currentOffset = document.offsetAt(editor.selection.active);
     let match = null;
     if (direction > 0) {
-      regex.lastIndex = Math.min(fullText.length, currentOffset + 1);
-      match = regex.exec(fullText);
-      if (!match) {
-        regex.lastIndex = 0;
-        match = regex.exec(fullText);
+      compiled.lastIndex = Math.min(fullText.length, currentOffset + 1);
+      match = compiled.exec(fullText);
+      if (!match && this.options.wrapscan) {
+        compiled.lastIndex = 0;
+        match = compiled.exec(fullText);
       }
     } else {
       let currentMatch;
-      while ((currentMatch = regex.exec(fullText))) {
+      while ((currentMatch = compiled.exec(fullText))) {
         if (currentMatch.index >= currentOffset) {
           break;
         }
         match = currentMatch;
         if (currentMatch[0].length === 0) {
-          regex.lastIndex += 1;
+          compiled.lastIndex += 1;
         }
       }
-      if (!match) {
-        while ((currentMatch = regex.exec(fullText))) {
+      if (!match && this.options.wrapscan) {
+        while ((currentMatch = compiled.exec(fullText))) {
           match = currentMatch;
           if (currentMatch[0].length === 0) {
-            regex.lastIndex += 1;
+            compiled.lastIndex += 1;
           }
         }
       }
@@ -1958,7 +3080,11 @@ class MviController {
     if (!match) {
       return;
     }
-    const position = this.normalizeNormalPosition(document, document.positionAt(match.index));
+    let position = this.normalizeNormalPosition(document, document.positionAt(match.index));
+    if (offset) {
+      const line = Math.max(0, Math.min(document.lineCount - 1, position.line + offset));
+      position = this.normalizeNormalPosition(document, new vscode.Position(line, 0));
+    }
     editor.selection = new vscode.Selection(position, position);
     this.refresh(editor);
   }
@@ -2092,13 +3218,40 @@ class MviController {
     this.marks.set(name, position);
   }
 
-  jumpToMark(editor, name) {
+  jumpToMark(editor, name, exact) {
     const target = this.marks.get(name);
     if (!target) {
       return;
     }
-    const position = this.normalizeNormalPosition(editor.document, this.clampPosition(editor.document, target));
+    const clamped = this.clampPosition(editor.document, target);
+    const position = exact
+      ? this.normalizeNormalPosition(editor.document, clamped)
+      : this.normalizeNormalPosition(editor.document, new vscode.Position(clamped.line, this.firstNonWhitespace(editor.document.lineAt(clamped.line).text)));
     editor.selection = new vscode.Selection(position, position);
+  }
+
+  isSectionBoundary(lineText) {
+    return /^\f/u.test(lineText)
+      || /^\.[A-Z]{2}\b/u.test(lineText)
+      || /^[{]/u.test(lineText);
+  }
+
+  previousSectionStart(document, position) {
+    for (let line = Math.max(0, position.line - 1); line >= 0; line -= 1) {
+      if (this.isSectionBoundary(document.lineAt(line).text)) {
+        return new vscode.Position(line, 0);
+      }
+    }
+    return new vscode.Position(0, 0);
+  }
+
+  nextSectionStart(document, position) {
+    for (let line = Math.min(document.lineCount - 1, position.line + 1); line < document.lineCount; line += 1) {
+      if (this.isSectionBoundary(document.lineAt(line).text)) {
+        return new vscode.Position(line, 0);
+      }
+    }
+    return new vscode.Position(this.maxNavigableLine(document), 0);
   }
 
   async repeatLastEdit(editor) {
@@ -2142,9 +3295,62 @@ class MviController {
       case "toggleCase":
         await this.toggleCaseAtCursor(editor, this.lastEdit.count);
         break;
+      case "deleteLeftChar":
+        await vscode.commands.executeCommand("deleteLeft");
+        break;
+      case "replaceMode":
+        await this.setMode("replace");
+        break;
       default:
         break;
     }
+    this.refresh(editor);
+  }
+
+  async repeatLastSubstitute(editor) {
+    if (!this.lastSubstitute) {
+      return;
+    }
+    const { pattern, replacement, flags } = this.lastSubstitute;
+    await this.executeSubstitute(editor, `s/${pattern}/${replacement}/${flags}`, this.currentLineRange(editor));
+    this.refresh(editor);
+  }
+
+  async adjustNumberUnderCursor(editor, count = 1, direction = 1) {
+    const line = editor.selection.active.line;
+    const text = editor.document.lineAt(line).text;
+    const cursor = editor.selection.active.character;
+    const regex = /[-+]?(?:0[xX][0-9a-fA-F]+|0[0-7]*|\d+)/g;
+    let match;
+    let target = null;
+    while ((match = regex.exec(text))) {
+      if (match.index + match[0].length > cursor || match.index >= cursor) {
+        target = match;
+        break;
+      }
+    }
+    if (!target) {
+      return;
+    }
+    const raw = target[0];
+    const delta = Math.max(1, count) * direction;
+    let nextValue;
+    if (/^[-+]?0[xX]/.test(raw)) {
+      nextValue = `${raw.startsWith("-") ? "-" : ""}0x${(parseInt(raw, 16) + delta).toString(16)}`;
+    } else if (/^[-+]?0[0-7]+$/.test(raw) && !/^[-+]?0$/.test(raw)) {
+      const sign = raw.startsWith("-") ? -1 : 1;
+      const value = parseInt(raw, 8) * sign;
+      const adjusted = value + delta;
+      nextValue = `${adjusted < 0 ? "-" : ""}0${Math.abs(adjusted).toString(8)}`;
+    } else {
+      nextValue = String(Number(raw) + delta);
+    }
+    const range = new vscode.Range(line, target.index, line, target.index + raw.length);
+    await editor.edit((editBuilder) => {
+      editBuilder.replace(range, nextValue);
+    });
+    const next = new vscode.Position(line, target.index);
+    editor.selection = new vscode.Selection(next, next);
     this.refresh(editor);
   }
 
@@ -2154,12 +3360,12 @@ class MviController {
     }
     this.recordingMacroRegister = /^[A-Z]$/.test(name) ? name.toLowerCase() : name;
     this.registers.set(this.recordingMacroRegister, { events: [] });
-    this.statusBar.text = `MVI RECORDING @${this.recordingMacroRegister}`;
+    this.statusBar.text = this.formatStatusBarText(`@${this.recordingMacroRegister}`, "recording");
   }
 
   stopMacroRecording() {
     this.recordingMacroRegister = null;
-    this.statusBar.text = `MVI ${this.mode.toUpperCase()}`;
+    this.statusBar.text = this.formatStatusBarText();
   }
 
   async playMacro(editor, name, count = 1) {
@@ -2635,6 +3841,14 @@ class MviController {
       case ")":
       case "{":
       case "}":
+      case " ":
+      case "+":
+      case "-":
+      case "_":
+      case "|":
+      case "G":
+      case "[[":
+      case "]]":
       case "ge":
       case "0":
       case "^":
@@ -3014,6 +4228,7 @@ class MviController {
     }
     this.statusBar.dispose();
     this.exStatusBar.dispose();
+    this.outputChannel.dispose();
     this.normalCursorDecoration.dispose();
     this.normalEmptyCursorDecoration.dispose();
     this.visualLineDecoration.dispose();
@@ -3053,6 +4268,62 @@ async function activate(context) {
     await controller.handleVisualBlockCommand();
   }));
 
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.pageDown", async () => {
+    await controller.handlePageMove(true);
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.pageUp", async () => {
+    await controller.handlePageMove(false);
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.scrollHalfPageDown", async () => {
+    await controller.handleHalfPageScroll(true);
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.scrollHalfPageUp", async () => {
+    await controller.handleHalfPageScroll(false);
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.scrollLineDown", async () => {
+    await controller.handleLineScroll(true);
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.scrollLineUp", async () => {
+    await controller.handleLineScroll(false);
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.refreshScreen", async () => {
+    await controller.handleScreenRefresh();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.fileInfo", async () => {
+    await controller.handleFileInfo();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.searchWordForward", async () => {
+    await controller.handleSearchWordForward();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.tagJump", async () => {
+    await controller.handleTagJump();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.tagPop", async () => {
+    await controller.handleTagPop();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.alternateFile", async () => {
+    await controller.handleAlternateFile();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.windowCommand", async () => {
+    await controller.handleWindowCommand();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.suspendCommand", async () => {
+    await controller.handleSuspendCommand();
+  }));
+
   context.subscriptions.push(vscode.commands.registerCommand("type", async (args) => {
     if (!controller || !controller.enabled) {
       return vscode.commands.executeCommand("default:type", args);
@@ -3064,10 +4335,19 @@ async function activate(context) {
     if (!controller || !controller.enabled) {
       return;
     }
+    controller.trackActiveEditor(editor || undefined);
     controller.refresh(editor || undefined);
   }));
 
   context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection((event) => {
+    if (!controller || !controller.enabled || !controller.isActiveEditor(event.textEditor)) {
+      return;
+    }
+    controller.maybeUpdateTrackedLineState(event.textEditor);
+    controller.refresh(event.textEditor);
+  }));
+
+  context.subscriptions.push(vscode.window.onDidChangeTextEditorVisibleRanges((event) => {
     if (!controller || !controller.enabled || !controller.isActiveEditor(event.textEditor)) {
       return;
     }

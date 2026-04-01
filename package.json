@@ -61,6 +61,62 @@
       {
         "command": "mvijs.visualBlock",
         "title": "MVI: Visual Block"
+      },
+      {
+        "command": "mvijs.pageDown",
+        "title": "MVI: Page Down"
+      },
+      {
+        "command": "mvijs.pageUp",
+        "title": "MVI: Page Up"
+      },
+      {
+        "command": "mvijs.scrollHalfPageDown",
+        "title": "MVI: Scroll Half Page Down"
+      },
+      {
+        "command": "mvijs.scrollHalfPageUp",
+        "title": "MVI: Scroll Half Page Up"
+      },
+      {
+        "command": "mvijs.scrollLineDown",
+        "title": "MVI: Scroll Line Down"
+      },
+      {
+        "command": "mvijs.scrollLineUp",
+        "title": "MVI: Scroll Line Up"
+      },
+      {
+        "command": "mvijs.refreshScreen",
+        "title": "MVI: Refresh Screen"
+      },
+      {
+        "command": "mvijs.fileInfo",
+        "title": "MVI: File Info"
+      },
+      {
+        "command": "mvijs.searchWordForward",
+        "title": "MVI: Search Word Forward"
+      },
+      {
+        "command": "mvijs.tagJump",
+        "title": "MVI: Tag Jump"
+      },
+      {
+        "command": "mvijs.tagPop",
+        "title": "MVI: Tag Pop"
+      },
+      {
+        "command": "mvijs.alternateFile",
+        "title": "MVI: Alternate File"
+      },
+      {
+        "command": "mvijs.windowCommand",
+        "title": "MVI: Window Command"
+      },
+      {
+        "command": "mvijs.suspendCommand",
+        "title": "MVI: Suspend Command"
       }
     ],
     "configuration": {
@@ -79,12 +135,7 @@
         "key": "escape",
         "when": "editorTextFocus && mvijs.enabled"
       },
-      {
-        "command": "mvijs.escape",
-        "key": "ctrl+[",
-        "when": "editorTextFocus && mvijs.enabled"
-      },
-      {
+        {
         "command": "mvijs.backspace",
         "key": "backspace",
         "when": "editorTextFocus && mvijs.enabled"
@@ -107,6 +158,81 @@
       {
         "command": "mvijs.visualBlock",
         "key": "ctrl+q",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.pageDown",
+        "key": "ctrl+f",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.pageUp",
+        "key": "ctrl+b",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.scrollHalfPageDown",
+        "key": "ctrl+d",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.scrollHalfPageUp",
+        "key": "ctrl+u",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.scrollLineDown",
+        "key": "ctrl+e",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.scrollLineUp",
+        "key": "ctrl+y",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.refreshScreen",
+        "key": "ctrl+l",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.refreshScreen",
+        "key": "ctrl+r",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.fileInfo",
+        "key": "ctrl+g",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.searchWordForward",
+        "key": "ctrl+a",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.tagJump",
+        "key": "ctrl+]",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.tagPop",
+        "key": "ctrl+t",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.alternateFile",
+        "key": "ctrl+6",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.windowCommand",
+        "key": "ctrl+w",
+        "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.suspendCommand",
+        "key": "ctrl+z",
         "when": "editorTextFocus && mvijs.enabled"
       }
     ]
