@@ -284,7 +284,8 @@ class MviController {
     return null;
   }
 
-  refresh(editor = this.getEditor()) {
+  refresh(editor = this.getEditor(), options = {}) {
+    const { revealCursor = false } = options;
     this.clearDecorations();
     if (!editor) {
       return;
@@ -340,7 +341,9 @@ class MviController {
     } else {
       this.clearSpellDecorations();
     }
-    editor.revealRange(new vscode.Range(active, active), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    if (revealCursor) {
+      editor.revealRange(new vscode.Range(active, active), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    }
   }
 
   scheduleSpellRefresh(editor) {
