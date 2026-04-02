@@ -599,20 +599,26 @@ class MviController {
     this.updateStatusBar();
   }
 
-  updateSearchPreview(editor) {
-    if (!editor || !this.exCommandLine || !["/", "?"].includes(this.exCommandLine.prefix)) {
-      return;
+  searchHighlightSpec(editor) {
+    if (!editor) {
+      return null;
     }
-    const spec = this.parseSearchSpec(this.exCommandLine.value, this.exCommandLine.prefix === "/" ? 1 : -1);
-    if (!spec || !spec.pattern) {
-      return;
+    if (this.exCommandLine && ["/", "?"].includes(this.exCommandLine.prefix)) {
+      return this.parseSearchSpec(this.exCommandLine.value, this.exCommandLine.prefix === "/" ? 1 : -1);
+    }
+    return this.lastSearch;
+  }
+
+  searchHighlightRanges(editor, spec) {
+    if (!editor || !spec || !spec.pattern) {
+      return [];
     }
     const text = editor.document.getText();
     let regex;
     try {
       regex = new RegExp(spec.pattern, this.searchFlags());
     } catch (_error) {
-      return;
+      return [];
     }
     const ranges = [];
     let match;
@@ -624,7 +630,19 @@ class MviController {
         regex.lastIndex += 1;
       }
     }
+    return ranges;
+  }
+
+  updateSearchPreview(editor) {
+    const spec = this.searchHighlightSpec(editor);
+    if (!editor || !spec || !spec.pattern) {
+      return;
+    }
+    const ranges = this.searchHighlightRanges(editor, spec);
     editor.setDecorations(this.searchPreviewDecoration, ranges);
+    if (!this.exCommandLine || !["/", "?"].includes(this.exCommandLine.prefix)) {
+      return;
+    }
     const searchStart = this.exCommandLine.startPosition || editor.selection.active;
     const previewStart = this.findSearchPosition(editor.document, searchStart, spec.pattern, spec.direction);
     if (!previewStart) {
@@ -743,8 +761,7 @@ class MviController {
     vscode.window.setStatusBarMessage(detail, 3000);
   }
 
-  async handleSearchWordForward() {
-    const editor = this.getEditor();
+  async searchWordUnderCursor(editor, { copyToClipboard = false, moveCursor = true } = {}) {
     if (!editor) {
       return;
     }
@@ -753,8 +770,20 @@ class MviController {
       return;
     }
     const pattern = editor.document.getText(wordRange);
+    if (copyToClipboard) {
+      await vscode.env.clipboard.writeText(pattern);
+    }
     this.lastSearch = { pattern: `\\b${pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, direction: 1, raw: pattern };
-    await this.runSearch(editor, this.lastSearch.pattern, 1, { regex: true });
+    if (moveCursor) {
+      await this.runSearch(editor, this.lastSearch.pattern, 1, { regex: true });
+      return;
+    }
+    this.refresh(editor);
+  }
+
+  async handleSearchWordForward() {
+    const editor = this.getEditor();
+    await this.searchWordUnderCursor(editor);
   }
 
   async handleTagJump() {
@@ -1401,6 +1430,9 @@ class MviController {
         return;
       case "#":
         await this.adjustNumberUnderCursor(editor, this.consumeCount(), 1);
+        return;
+      case "*":
+        await this.searchWordUnderCursor(editor, { copyToClipboard: true, moveCursor: false });
         return;
       case "\u0001":
         await this.handleSearchWordForward();

@@ -148,12 +148,7 @@
       {
         "command": "mvijs.visualBlock",
         "key": "ctrl+v",
-        "when": "editorTextFocus && mvijs.enabled"
-      },
-      {
-        "command": "mvijs.visualBlock",
-        "key": "cmd+v",
-        "when": "isMac && editorTextFocus && mvijs.enabled"
+        "when": "editorTextFocus && mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode"
       },
       {
         "command": "mvijs.visualBlock",
