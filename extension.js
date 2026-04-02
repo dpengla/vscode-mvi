@@ -342,8 +342,12 @@ class MviController {
       this.clearSpellDecorations();
     }
     if (revealCursor) {
-      editor.revealRange(new vscode.Range(active, active), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+      editor.revealRange(new vscode.Range(active, active), vscode.TextEditorRevealType.Default);
     }
+  }
+
+  refreshAfterMotion(editor) {
+    this.refresh(editor, { revealCursor: true });
   }
 
   scheduleSpellRefresh(editor) {
@@ -1197,7 +1201,7 @@ class MviController {
       case "M":
       case "L":
         this.move(editor, key, false, key === "G" ? this.consumeOptionalCount() : this.consumeCount());
-        this.refresh(editor);
+        this.refreshAfterMotion(editor);
         return;
       case " ":
         this.beginPendingCommand({ type: "space-prefix" });
@@ -1499,7 +1503,7 @@ class MviController {
         } else if (this.mode === "visual-block") {
           this.expandVisualBlockSelections(editor);
         }
-        this.refresh(editor);
+        this.refreshAfterMotion(editor);
         return;
       case "g":
         this.pendingOperator = { type: "visual-g" };
@@ -1620,11 +1624,11 @@ class MviController {
         for (let i = 0; i < count; i += 1) {
           await this.handlePageMove(key === "j");
         }
-        this.refresh(editor);
+        this.refreshAfterMotion(editor);
         return;
       }
       this.move(editor, " ", false, this.resolvePendingCount());
-      this.refresh(editor);
+      this.refreshAfterMotion(editor);
       await this.handleNormalInput(editor, key, { skipRecord: true });
       return;
     }
@@ -1657,7 +1661,7 @@ class MviController {
         }
         this.clearPendingCounts();
       }
-      this.refresh(editor);
+      this.refreshAfterMotion(editor);
       return;
     }
     if ((operator === "d" || operator === "c" || operator === "y") && ["f", "F", "t", "T"].includes(key)) {
