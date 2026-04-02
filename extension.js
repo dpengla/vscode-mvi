@@ -278,11 +278,8 @@ class MviController {
   }
 
   desiredCursorStyle() {
-    if (this.mode === "normal" || this.mode === "visual-line" || this.mode === "visual-block" || this.mode === "replace") {
+    if (this.mode === "normal" || String(this.mode).startsWith("visual") || this.mode === "replace") {
       return vscode.TextEditorCursorStyle.Block;
-    }
-    if (String(this.mode).startsWith("visual")) {
-      return vscode.TextEditorCursorStyle.LineThin;
     }
     return null;
   }
@@ -621,6 +618,17 @@ class MviController {
       }
     }
     editor.setDecorations(this.searchPreviewDecoration, ranges);
+    const searchStart = this.exCommandLine.startPosition || editor.selection.active;
+    const previewStart = this.findSearchPosition(editor.document, searchStart, spec.pattern, spec.direction);
+    if (!previewStart) {
+      return;
+    }
+    let position = this.normalizeNormalPosition(editor.document, previewStart);
+    if (spec.offset) {
+      const line = Math.max(0, Math.min(editor.document.lineCount - 1, position.line + spec.offset));
+      position = this.normalizeNormalPosition(editor.document, new vscode.Position(line, 0));
+    }
+    editor.selection = new vscode.Selection(position, position);
   }
 
   async handleVisualBlockCommand() {
@@ -629,8 +637,9 @@ class MviController {
       return;
     }
     if (this.mode === "visual-block") {
+      const exitPosition = this.visualAnchor || editor.selection.start;
       await this.setMode("normal");
-      this.collapseToSelectionStart(editor);
+      this.collapseToSelectionStart(editor, exitPosition);
       return;
     }
     await this.enterVisualBlock(editor);
@@ -1502,9 +1511,12 @@ class MviController {
         this.statusBar.text = this.formatStatusBarText("]");
         return;
       case "y":
+        {
+          const exitPosition = this.visualAnchor || editor.selection.start;
         await this.yankSelection(editor);
         await this.setMode("normal");
-        this.collapseToSelectionStart(editor);
+        this.collapseToSelectionStart(editor, exitPosition);
+        }
         return;
       case "d":
         await this.deleteSelection(editor);
@@ -1541,13 +1553,17 @@ class MviController {
         }
         return;
       case "v":
+        {
+          const exitPosition = this.visualAnchor || editor.selection.start;
         await this.setMode("normal");
-        this.collapseToSelectionStart(editor);
+        this.collapseToSelectionStart(editor, exitPosition);
+        }
         return;
       case "V":
         if (this.mode === "visual-line") {
+          const exitPosition = this.visualAnchor || editor.selection.start;
           await this.setMode("normal");
-          this.collapseToSelectionStart(editor);
+          this.collapseToSelectionStart(editor, exitPosition);
         } else {
           this.visualAnchor = new vscode.Position(editor.selection.active.line, 0);
           await this.setMode("visual-line");
@@ -2101,7 +2117,8 @@ class MviController {
   async startSearch(editor, direction) {
     this.exCommandLine = {
       prefix: direction > 0 ? "/" : "?",
-      value: ""
+      value: "",
+      startPosition: editor.selection.active
     };
     await this.setContext(EX_CONTEXT_KEY, true);
     this.updateStatusBar();
@@ -3906,9 +3923,9 @@ class MviController {
     };
   }
 
-  collapseToSelectionStart(editor) {
-    const start = this.normalizeNormalPosition(editor.document, editor.selection.start);
-    editor.selection = new vscode.Selection(start, start);
+  collapseToSelectionStart(editor, position = null) {
+    const start = this.normalizeNormalPosition(editor.document, position || editor.selection.start);
+    editor.selections = [new vscode.Selection(start, start)];
     this.refresh(editor);
   }
 
