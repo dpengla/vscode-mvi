@@ -113,6 +113,12 @@ class MviController {
       borderWidth: "1px",
       borderStyle: "solid"
     });
+    this.matchingBracketDecoration = vscode.window.createTextEditorDecorationType({
+      backgroundColor: new vscode.ThemeColor("editor.findMatchHighlightBackground"),
+      borderColor: new vscode.ThemeColor("editor.findMatchBorder"),
+      borderWidth: "2px",
+      borderStyle: "solid"
+    });
   }
 
   async setContext(key, value) {
@@ -227,6 +233,7 @@ class MviController {
       editor.setDecorations(this.visualBlockDecoration, []);
       editor.setDecorations(this.visualBlockEmptyDecoration, []);
       editor.setDecorations(this.searchPreviewDecoration, []);
+      editor.setDecorations(this.matchingBracketDecoration, []);
       editor.setDecorations(this.cursorLineDecoration, []);
     }
   }
@@ -325,6 +332,10 @@ class MviController {
       } else if (editor.document.lineAt(active.line).text.length === 0) {
         editor.setDecorations(this.normalEmptyCursorDecoration, [new vscode.Range(active.line, 0, active.line, 0)]);
       }
+    }
+    const matchingBracketRange = this.matchingBracketRange(editor.document, active);
+    if (matchingBracketRange) {
+      editor.setDecorations(this.matchingBracketDecoration, [matchingBracketRange]);
     }
     this.updateSearchPreview(editor);
     if (this.spellEnabled) {
@@ -1586,31 +1597,15 @@ class MviController {
     }
     if (operator && typeof operator === "object" && operator.type === "space-prefix") {
       if (key === "j" || key === "k") {
-        this.pendingOperator = {
-          type: "space-scroll",
-          direction: key === "j" ? "down" : "up",
-          firstKey: key
-        };
-        this.statusBar.text = this.formatStatusBarText(` ${key}`);
-        return;
-      }
-      this.move(editor, " ", false, this.resolvePendingCount());
-      this.refresh(editor);
-      await this.handleNormalInput(editor, key, { skipRecord: true });
-      return;
-    }
-    if (operator && typeof operator === "object" && operator.type === "space-scroll") {
-      if (key === (operator.direction === "down" ? "j" : "k")) {
         const count = this.resolvePendingCount();
         for (let i = 0; i < count; i += 1) {
-          await this.handlePageMove(operator.direction === "down");
+          await this.handlePageMove(key === "j");
         }
         this.refresh(editor);
         return;
       }
       this.move(editor, " ", false, this.resolvePendingCount());
       this.refresh(editor);
-      await this.handleNormalInput(editor, operator.firstKey, { skipRecord: true });
       await this.handleNormalInput(editor, key, { skipRecord: true });
       return;
     }
@@ -4163,29 +4158,49 @@ class MviController {
     return new vscode.Position(line, 0);
   }
 
-  matchPair(document, position) {
-    const pairs = { "(": ")", ")": "(", "[": "]", "]": "[", "{": "}", "}": "{", "<": ">", ">": "<" };
-    const openers = new Set(["(", "[", "{", "<"]);
-    const lineText = document.lineAt(position.line).text;
-    const char = lineText[position.character];
+  matchingBracketRange(document, position) {
+    const target = this.findMatchingBracket(document, position);
+    if (!target) {
+      return null;
+    }
+    return new vscode.Range(target, target.translate(0, 1));
+  }
+
+  findMatchingBracket(document, position) {
+    const pairs = {
+      "(": ")",
+      ")": "(",
+      "[": "]",
+      "]": "[",
+      "{": "}",
+      "}": "{"
+    };
+    const openers = new Set(["(", "[", "{"]);
+    const text = document.getText();
+    const startOffset = document.offsetAt(position);
+    const char = text[startOffset];
     const counterpart = pairs[char];
     if (!counterpart) {
-      return position;
+      return null;
     }
     const direction = openers.has(char) ? 1 : -1;
     let depth = 0;
-    for (let i = position.character; direction > 0 ? i < lineText.length : i >= 0; i += direction) {
-      const current = lineText[i];
+    for (let offset = startOffset; direction > 0 ? offset < text.length : offset >= 0; offset += direction) {
+      const current = text[offset];
       if (current === char) {
         depth += 1;
       } else if (current === counterpart) {
         depth -= 1;
         if (depth === 0) {
-          return new vscode.Position(position.line, i);
+          return document.positionAt(offset);
         }
       }
     }
-    return position;
+    return null;
+  }
+
+  matchPair(document, position) {
+    return this.findMatchingBracket(document, position) || position;
   }
 
   viewportMotion(editor, which) {
