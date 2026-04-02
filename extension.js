@@ -654,6 +654,7 @@ class MviController {
       position = this.normalizeNormalPosition(editor.document, new vscode.Position(line, 0));
     }
     editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.Default);
   }
 
   async handleVisualBlockCommand() {
@@ -3137,7 +3138,7 @@ class MviController {
       position = this.normalizeNormalPosition(document, new vscode.Position(line, 0));
     }
     editor.selection = new vscode.Selection(position, position);
-    this.refresh(editor);
+    this.refresh(editor, { revealCursor: true });
   }
 
   async copyCurrentLine(editor, count = 1) {
