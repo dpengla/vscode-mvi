@@ -430,6 +430,26 @@ class MviController {
     }
   }
 
+  isRangeSelection(selection) {
+    return Boolean(selection && !selection.anchor.isEqual(selection.active));
+  }
+
+  async handleSelectionChange(event) {
+    if (!this.enabled || !event || !this.isActiveEditor(event.textEditor)) {
+      return;
+    }
+    this.maybeUpdateTrackedLineState(event.textEditor);
+    const primarySelection = event.selections && event.selections.length ? event.selections[0] : event.textEditor.selection;
+    const mouseSelection = event.kind === vscode.TextEditorSelectionChangeKind.Mouse;
+    if (mouseSelection && this.mode === "normal" && event.selections.length === 1 && this.isRangeSelection(primarySelection)) {
+      this.visualAnchor = primarySelection.anchor;
+      await this.setMode("visual");
+      this.refresh(event.textEditor);
+      return;
+    }
+    this.refresh(event.textEditor);
+  }
+
   clampPosition(document, position) {
     const line = Math.max(0, Math.min(position.line, document.lineCount - 1));
     const lineLength = document.lineAt(line).text.length;
@@ -4411,12 +4431,11 @@ async function activate(context) {
     controller.refresh(editor || undefined);
   }));
 
-  context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection((event) => {
-    if (!controller || !controller.enabled || !controller.isActiveEditor(event.textEditor)) {
+  context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(async (event) => {
+    if (!controller) {
       return;
     }
-    controller.maybeUpdateTrackedLineState(event.textEditor);
-    controller.refresh(event.textEditor);
+    await controller.handleSelectionChange(event);
   }));
 
   context.subscriptions.push(vscode.window.onDidChangeTextEditorVisibleRanges((event) => {
