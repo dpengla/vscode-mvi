@@ -1,6 +1,6 @@
 # MVI
 
-`MVI` is a local VS Code extension with vi-style modal controls.
+`MVI` is a VS Code extension with vi-style modal controls.
 
 ## What It Does
 
