@@ -874,6 +874,11 @@ class MviController {
     await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
   }
 
+  async handleExplorerFind() {
+    await vscode.commands.executeCommand("list.clear");
+    await vscode.commands.executeCommand("list.find");
+  }
+
   captureCurrentLineState(editor) {
     if (!editor) {
       this.trackedLineState = null;
@@ -4456,6 +4461,10 @@ async function activate(context) {
 
   context.subscriptions.push(vscode.commands.registerCommand("mvijs.explorerRight", async () => {
     await controller.handleExplorerRight();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.explorerFind", async () => {
+    await controller.handleExplorerFind();
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("type", async (args) => {

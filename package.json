@@ -131,6 +131,10 @@
       {
         "command": "mvijs.explorerRight",
         "title": "MVI: Explorer Right"
+      },
+      {
+        "command": "mvijs.explorerFind",
+        "title": "MVI: Explorer Find"
       }
     ],
     "configuration": {
@@ -257,6 +261,16 @@
       {
         "command": "mvijs.explorerUp",
         "key": "k",
+        "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && !inputFocus"
+      },
+      {
+        "command": "mvijs.explorerFind",
+        "key": "/",
+        "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && !inputFocus"
+      },
+      {
+        "command": "mvijs.explorerFind",
+        "key": "?",
         "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && !inputFocus"
       },
       {
