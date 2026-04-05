@@ -327,8 +327,6 @@ class MviController {
       const range = this.normalCursorRange(editor, active);
       if (range) {
         editor.setDecorations(this.normalCursorDecoration, [range]);
-      } else if (editor.document.lineAt(active.line).text.length === 0) {
-        editor.setDecorations(this.normalEmptyCursorDecoration, [new vscode.Range(active.line, 0, active.line, 0)]);
       }
     }
     const matchingBracketRange = this.matchingBracketRange(editor.document, active);
@@ -661,6 +659,15 @@ class MviController {
     const ranges = this.searchHighlightRanges(editor, spec);
     editor.setDecorations(this.searchPreviewDecoration, ranges);
     if (!this.exCommandLine || !["/", "?"].includes(this.exCommandLine.prefix)) {
+      return;
+    }
+    if (!String(this.exCommandLine.value || "").trim()) {
+      const start = this.normalizeNormalPosition(
+        editor.document,
+        this.exCommandLine.startPosition || editor.selection.active
+      );
+      editor.selection = new vscode.Selection(start, start);
+      editor.revealRange(new vscode.Range(start, start), vscode.TextEditorRevealType.Default);
       return;
     }
     const searchStart = this.exCommandLine.startPosition || editor.selection.active;
