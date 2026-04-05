@@ -870,7 +870,8 @@ class MviController {
   }
 
   async handleExplorerRight() {
-    await vscode.commands.executeCommand("list.expand");
+    await vscode.commands.executeCommand("list.select");
+    await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
   }
 
   captureCurrentLineState(editor) {

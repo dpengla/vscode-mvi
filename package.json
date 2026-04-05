@@ -260,9 +260,14 @@
         "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && !inputFocus"
       },
       {
+        "command": "list.expand",
+        "key": "l",
+        "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && explorerResourceIsFolder && !inputFocus"
+      },
+      {
         "command": "mvijs.explorerRight",
         "key": "l",
-        "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && !inputFocus"
+        "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && !explorerResourceIsFolder && !inputFocus"
       }
     ]
   }
