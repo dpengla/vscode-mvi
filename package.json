@@ -28,9 +28,7 @@
     }
   },
   "activationEvents": [
-    "onStartupFinished",
-    "onCommand:mvijs.enable",
-    "onCommand:mvijs.disable"
+    "onStartupFinished"
   ],
   "main": "./extension.js",
   "scripts": {
@@ -117,6 +115,22 @@
       {
         "command": "mvijs.suspendCommand",
         "title": "MVI: Suspend Command"
+      },
+      {
+        "command": "mvijs.explorerLeft",
+        "title": "MVI: Explorer Left"
+      },
+      {
+        "command": "mvijs.explorerDown",
+        "title": "MVI: Explorer Down"
+      },
+      {
+        "command": "mvijs.explorerUp",
+        "title": "MVI: Explorer Up"
+      },
+      {
+        "command": "mvijs.explorerRight",
+        "title": "MVI: Explorer Right"
       }
     ],
     "configuration": {
@@ -229,6 +243,26 @@
         "command": "mvijs.suspendCommand",
         "key": "ctrl+z",
         "when": "editorTextFocus && mvijs.enabled"
+      },
+      {
+        "command": "mvijs.explorerLeft",
+        "key": "h",
+        "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && !inputFocus"
+      },
+      {
+        "command": "mvijs.explorerDown",
+        "key": "j",
+        "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && !inputFocus"
+      },
+      {
+        "command": "mvijs.explorerUp",
+        "key": "k",
+        "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && !inputFocus"
+      },
+      {
+        "command": "mvijs.explorerRight",
+        "key": "l",
+        "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && !inputFocus"
       }
     ]
   }
