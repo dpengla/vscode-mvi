@@ -869,6 +869,16 @@ class MviController {
     await vscode.commands.executeCommand("list.selectAndPreserveFocus");
   }
 
+  async handleExplorerPageDown() {
+    await vscode.commands.executeCommand("list.focusPageDown");
+    await vscode.commands.executeCommand("list.selectAndPreserveFocus");
+  }
+
+  async handleExplorerPageUp() {
+    await vscode.commands.executeCommand("list.focusPageUp");
+    await vscode.commands.executeCommand("list.selectAndPreserveFocus");
+  }
+
   async handleExplorerRight() {
     await vscode.commands.executeCommand("list.select");
     await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
@@ -4457,6 +4467,14 @@ async function activate(context) {
 
   context.subscriptions.push(vscode.commands.registerCommand("mvijs.explorerUp", async () => {
     await controller.handleExplorerUp();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.explorerPageDown", async () => {
+    await controller.handleExplorerPageDown();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.explorerPageUp", async () => {
+    await controller.handleExplorerPageUp();
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("mvijs.explorerRight", async () => {

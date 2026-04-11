@@ -129,6 +129,14 @@
         "title": "MVI: Explorer Up"
       },
       {
+        "command": "mvijs.explorerPageDown",
+        "title": "MVI: Explorer Page Down"
+      },
+      {
+        "command": "mvijs.explorerPageUp",
+        "title": "MVI: Explorer Page Up"
+      },
+      {
         "command": "mvijs.explorerRight",
         "title": "MVI: Explorer Right"
       },
@@ -261,6 +269,16 @@
       {
         "command": "mvijs.explorerUp",
         "key": "k",
+        "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && !inputFocus"
+      },
+      {
+        "command": "mvijs.explorerPageDown",
+        "key": "ctrl+f",
+        "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && !inputFocus"
+      },
+      {
+        "command": "mvijs.explorerPageUp",
+        "key": "ctrl+b",
         "when": "mvijs.enabled && mvijs.mode != 'insert' && !mvijs.exMode && listFocus && sideBarFocus && explorerViewletFocus && filesExplorerFocus && !inputFocus"
       },
       {
