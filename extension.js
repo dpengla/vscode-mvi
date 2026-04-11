@@ -856,7 +856,9 @@ class MviController {
   }
 
   async handleExplorerLeft() {
+    await vscode.commands.executeCommand("list.focusParent");
     await vscode.commands.executeCommand("list.collapse");
+    await vscode.commands.executeCommand("list.selectAndPreserveFocus");
   }
 
   async handleExplorerDown() {
