@@ -1756,8 +1756,41 @@ class MviController {
           this.expandVisualLineSelection(editor);
         }
         this.clearPendingCounts();
+      } else if (operator.type === "normal-g" && key === "U") {
+        this.pendingOperator = { type: "case-operator", transform: "upper" };
+        this.statusBar.text = this.formatStatusBarText("gU");
+        return;
+      } else if (operator.type === "normal-g" && key === "u") {
+        this.pendingOperator = { type: "case-operator", transform: "lower" };
+        this.statusBar.text = this.formatStatusBarText("gu");
+        return;
       }
       this.refreshAfterMotion(editor);
+      return;
+    }
+    if (operator && typeof operator === "object" && operator.type === "case-operator") {
+      if (key === "g") {
+        this.pendingOperator = { type: "case-operator-g-prefix", transform: operator.transform };
+        this.statusBar.text = this.formatStatusBarText("gUg");
+        return;
+      }
+      if (["h", "j", "k", "l", "w", "b", "e", "W", "B", "E", "(", ")", "{", "}", " ", "+", "-", "_", "|", "0", "^", "$", "%", "H", "M", "L", "G", "f", "F", "t", "T", "[[", "]]"].includes(key)) {
+        const count = key === "G" ? this.resolvePendingOptionalCount() : this.resolvePendingCount();
+        await this.applyCaseOperatorToMotion(editor, operator.transform, key, count);
+        this.refresh(editor);
+        return;
+      }
+      this.clearPendingCounts();
+      this.refresh(editor);
+      return;
+    }
+    if (operator && typeof operator === "object" && operator.type === "case-operator-g-prefix") {
+      if (key === "e") {
+        await this.applyCaseOperatorToMotion(editor, operator.transform, "ge", this.resolvePendingCount());
+      } else {
+        this.clearPendingCounts();
+      }
+      this.refresh(editor);
       return;
     }
     if ((operator === "d" || operator === "c" || operator === "y") && ["f", "F", "t", "T"].includes(key)) {
@@ -3244,6 +3277,28 @@ class MviController {
       editor.selection = new vscode.Selection(normalized.start, normalized.start);
       await this.setMode("insert");
     }
+  }
+
+  async applyCaseOperatorToMotion(editor, transform, motion, count = 1) {
+    const start = this.currentPosition(editor);
+    const normalized = this.makeOperatorMotionRange(editor.document, start, "gU", motion, count);
+    if (!normalized) {
+      return;
+    }
+    const range = new vscode.Range(normalized.start, normalized.end);
+    const text = editor.document.getText(range);
+    if (!text) {
+      editor.selection = new vscode.Selection(normalized.start, normalized.start);
+      return;
+    }
+    const transformed = transform === "upper" ? text.toUpperCase() : text.toLowerCase();
+    if (transformed !== text) {
+      await editor.edit((editBuilder) => {
+        editBuilder.replace(range, transformed);
+      });
+    }
+    const next = this.normalizeNormalPosition(editor.document, normalized.start);
+    editor.selection = new vscode.Selection(next, next);
   }
 
   async applyOperatorToFind(editor, operator, motion, key) {

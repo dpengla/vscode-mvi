@@ -56,6 +56,8 @@ These are the main motions currently implemented in normal mode, and most of the
 - Repeat last substitute: `&`
 - Undo and tracked line restore: `u` `U`
 - Toggle case: `~`
+- Uppercase by motion: `gU{motion}` (for example, `gUw`)
+- Lowercase by motion: `gu{motion}` (for example, `guw`)
 - Increment number under cursor: `#`
 - Counts are supported for normal motions and many operators
 
