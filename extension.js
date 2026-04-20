@@ -13,6 +13,7 @@ class MviController {
     this.pendingOperator = null;
     this.visualAnchor = null;
     this.lastSearch = null;
+    this.searchHighlightVisible = true;
     this.marks = new Map();
     this.lastEdit = null;
     this.insertSession = null;
@@ -108,8 +109,8 @@ class MviController {
       overviewRulerColor: new vscode.ThemeColor("editorError.foreground")
     });
     this.searchPreviewDecoration = vscode.window.createTextEditorDecorationType({
-      backgroundColor: new vscode.ThemeColor("editor.findMatchHighlightBackground"),
-      borderColor: new vscode.ThemeColor("editor.findMatchHighlightBorder"),
+      backgroundColor: new vscode.ThemeColor("editor.findMatchBackground"),
+      borderColor: new vscode.ThemeColor("editor.findMatchBorder"),
       borderWidth: "1px",
       borderStyle: "solid"
     });
@@ -577,6 +578,7 @@ class MviController {
     this.pendingOperator = null;
     this.pendingRegister = false;
     this.clearPendingCounts();
+    this.searchHighlightVisible = false;
     if (this.mode === "insert" || this.mode === "replace") {
       this.recordMacroEvent({ type: "escape" });
       const active = this.normalPositionFromInsert(editor.document, editor.selection.active);
@@ -603,6 +605,7 @@ class MviController {
         return;
       }
       this.lastSearch = spec;
+      this.searchHighlightVisible = true;
       await this.runSearch(editor, spec.pattern, spec.direction, { regex: true, offset: spec.offset || 0 });
       this.refresh(editor);
       return;
@@ -623,6 +626,9 @@ class MviController {
     }
     if (this.exCommandLine && ["/", "?"].includes(this.exCommandLine.prefix)) {
       return this.parseSearchSpec(this.exCommandLine.value, this.exCommandLine.prefix === "/" ? 1 : -1);
+    }
+    if (!this.searchHighlightVisible) {
+      return null;
     }
     return this.lastSearch;
   }
@@ -802,6 +808,7 @@ class MviController {
       await vscode.env.clipboard.writeText(pattern);
     }
     this.lastSearch = { pattern: `\\b${pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, direction: 1, raw: pattern };
+    this.searchHighlightVisible = true;
     if (moveCursor) {
       await this.runSearch(editor, this.lastSearch.pattern, 1, { regex: true });
       return;
@@ -3228,6 +3235,7 @@ class MviController {
     if (!match) {
       return;
     }
+    this.searchHighlightVisible = true;
     let position = this.normalizeNormalPosition(document, document.positionAt(match.index));
     if (offset) {
       const line = Math.max(0, Math.min(document.lineCount - 1, position.line + offset));
