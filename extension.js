@@ -800,7 +800,7 @@ class MviController {
     if (!editor) {
       return;
     }
-    const wordRange = this.currentWordRange(editor.document, this.currentPosition(editor));
+    const wordRange = this.currentSearchWordRange(editor.document, this.currentPosition(editor));
     if (!wordRange) {
       return;
     }
@@ -1090,6 +1090,26 @@ class MviController {
       start -= 1;
     }
     while (end < lineText.length && this.isSpellWordCharacter(lineText[end])) {
+      end += 1;
+    }
+    return new vscode.Range(position.line, start, position.line, end);
+  }
+
+  currentSearchWordRange(document, position) {
+    const lineText = document.lineAt(position.line).text;
+    if (!lineText.length) {
+      return null;
+    }
+    const cursor = Math.min(position.character, Math.max(0, lineText.length - 1));
+    if (!this.isWordCharacter(lineText[cursor])) {
+      return null;
+    }
+    let start = cursor;
+    let end = cursor + 1;
+    while (start > 0 && this.isWordCharacter(lineText[start - 1])) {
+      start -= 1;
+    }
+    while (end < lineText.length && this.isWordCharacter(lineText[end])) {
       end += 1;
     }
     return new vscode.Range(position.line, start, position.line, end);
