@@ -579,6 +579,7 @@ class MviController {
     this.pendingRegister = false;
     this.clearPendingCounts();
     this.searchHighlightVisible = false;
+    this.lastSearch = null;
     if (this.mode === "insert" || this.mode === "replace") {
       this.recordMacroEvent({ type: "escape" });
       const active = this.normalPositionFromInsert(editor.document, editor.selection.active);
