@@ -141,7 +141,7 @@ When MVI is enabled and you are not in insert mode, the VS Code Files explorer a
 - `:set spell?` shows current spell state
 - `z=` shows spelling suggestions for the word under cursor
 - Spell support uses external `aspell`
-- Current configured path is `/opt/homebrew/bin/aspell`
+- `aspell` binary is auto-discovered (`which aspell`, or `where aspell` on Windows)
 
 ## Commands And Configuration
 

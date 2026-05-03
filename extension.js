@@ -1,5 +1,5 @@
 const vscode = require("vscode");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const MODE_CONTEXT_KEY = "mvijs.mode";
 const ENABLED_CONTEXT_KEY = "mvijs.enabled";
@@ -29,7 +29,7 @@ class MviController {
     this.visualBlockColumn = null;
     this.exCommandLine = null;
     this.spellEnabled = false;
-    this.spellProgram = "/opt/homebrew/bin/aspell";
+    this.spellProgram = this.resolveAspellProgram();
     this.spellRefreshTimer = null;
     this.spellRequestId = 0;
     this.scrollLineCount = null;
@@ -1073,6 +1073,19 @@ class MviController {
       }
     }
     return result;
+  }
+
+  resolveAspellProgram() {
+    const command = process.platform === "win32" ? "where" : "which";
+    const result = spawnSync(command, ["aspell"], { encoding: "utf8" });
+    if (result.status !== 0) {
+      return "aspell";
+    }
+    const firstMatch = String(result.stdout || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+    return firstMatch || "aspell";
   }
 
   currentWordRange(document, position) {
