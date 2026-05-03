@@ -972,7 +972,13 @@ class MviController {
       return;
     }
     const word = editor.document.getText(wordRange);
-    const suggestions = await this.fetchSpellSuggestions(word);
+    const result = await this.fetchSpellSuggestions(word);
+    if (result.correct) {
+      vscode.window.setStatusBarMessage(`mvi spell: \"${word}\" is correct`, 2000);
+      this.refresh(editor);
+      return;
+    }
+    const suggestions = result.suggestions;
     if (!suggestions.length) {
       vscode.window.setStatusBarMessage(`mvi spell: no suggestions for ${word}`, 2000);
       this.refresh(editor);
@@ -1007,11 +1013,11 @@ class MviController {
         stderr += chunk.toString();
       });
       child.on("error", () => {
-        resolve([]);
+        resolve({ suggestions: [], correct: false });
       });
       child.on("close", () => {
         if (stderr.trim()) {
-          resolve([]);
+          resolve({ suggestions: [], correct: false });
           return;
         }
         resolve(this.parseAspellSuggestions(stdout));
@@ -1050,15 +1056,21 @@ class MviController {
       if (line.startsWith("& ")) {
         const parts = line.split(":");
         if (parts.length < 2) {
-          return [];
+          return { suggestions: [], correct: false };
         }
-        return parts[1].split(",").map((item) => item.trim()).filter(Boolean);
+        return {
+          suggestions: parts[1].split(",").map((item) => item.trim()).filter(Boolean),
+          correct: false
+        };
       }
-      if (line.startsWith("# ") || line.startsWith("*")) {
-        return [];
+      if (line.startsWith("*")) {
+        return { suggestions: [], correct: true };
+      }
+      if (line.startsWith("# ")) {
+        return { suggestions: [], correct: false };
       }
     }
-    return [];
+    return { suggestions: [], correct: false };
   }
 
   parseAspellMisspellings(output) {
