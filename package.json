@@ -3,7 +3,7 @@
   "displayName": "MVI",
   "description": "VS Code extension with mvi-style modal controls.",
   "repository": "https://github.com/dpengla/vscode-mvi",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "depeng",
   "license": "MIT",
   "engines": {
