@@ -862,8 +862,10 @@ class MviController {
     await vscode.commands.executeCommand("workbench.action.toggleZenMode");
   }
 
-  async handleExplorerLeft() {
-    await vscode.commands.executeCommand("list.focusParent");
+  async handleExplorerLeft(action = "collapseCurrent") {
+    if (action === "collapseParent") {
+      await vscode.commands.executeCommand("list.focusParent");
+    }
     await vscode.commands.executeCommand("list.collapse");
     await vscode.commands.executeCommand("list.selectAndPreserveFocus");
   }
@@ -4572,8 +4574,8 @@ async function activate(context) {
     await controller.handleSuspendCommand();
   }));
 
-  context.subscriptions.push(vscode.commands.registerCommand("mvijs.explorerLeft", async () => {
-    await controller.handleExplorerLeft();
+  context.subscriptions.push(vscode.commands.registerCommand("mvijs.explorerLeft", async (action) => {
+    await controller.handleExplorerLeft(action);
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("mvijs.explorerDown", async () => {
